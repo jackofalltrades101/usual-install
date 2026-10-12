@@ -19,7 +19,7 @@ itself — there is no extension to find, enable, or keep up to date, and browse
 you install later are picked up on their own.
 
 - **Any Chromium-based browser.** Chromium, Chrome, Brave, Vivaldi, Edge. Flatpak
-  builds too, with one extra command.
+  builds too, set up automatically.
 - **No password for most installs.** Flathub applications install into your own
   user account. Only distro packages ask, and only once per session.
 - **About 3,400 applications**, built from the metadata vendors already publish.
@@ -134,11 +134,10 @@ catalogue you sign yourself.
 
 ### Flatpak browsers
 
-Sandboxed browsers need one extra command, which does not need root:
-
-```sh
-usual-provision install --flatpak
-```
+Nothing extra to do. A browser installed through Flatpak runs in a sandbox, so it
+needs a permission and a small bridge that ordinary browsers do not; the service
+sets those up for each user on its own, within about a minute of the browser
+being installed, and as that user rather than as root.
 
 ## Configuration
 

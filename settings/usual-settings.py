@@ -126,8 +126,10 @@ class SettingsWindow(Gtk.ApplicationWindow):
         f = group(self.box, "Browsers")
         for name in status.get("browsers", []):
             f.add(name, "Set up")
+        ready = set(status.get("flatpak_ready", []))
         for name in status.get("flatpak_browsers", []):
-            f.add(f"{name} (Flatpak)", "Needs one step: usual-provision install --flatpak")
+            f.add(f"{name} (Flatpak)", "Set up" if name in ready
+                  else "Being set up; this takes up to a minute")
         for name in status.get("snap_browsers", []):
             f.add(f"{name} (Snap)", "Cannot be supported; install a non-Snap version")
         if not any((status.get("browsers"), status.get("flatpak_browsers"),

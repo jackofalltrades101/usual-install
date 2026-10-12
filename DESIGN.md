@@ -95,8 +95,12 @@ immutable distros.
 root and no interaction, so the provisioner grants the permission itself —
 "install once" does not have to break for Flatpak browsers. `provision.py install
 --flatpak` grants the override, installs a `flatpak-spawn --host` wrapper the sandbox can
-execute, and writes the manifest and CRX into the sandbox's view of `~/.config`. A
-sandboxed Chromium demonstrably reaches the host through it. One piece is still
+execute, and writes the manifest and CRX into the sandbox's view of `~/.config`.
+usuald now does this for every user automatically: each poll it checks, as root and
+read-only, whether each user's Flatpak browsers have the override and manifests, and
+where anything is missing it runs `usual-provision flatpak` *as that user* via
+`runuser`, retrying failures after ten minutes. A sandboxed Chromium demonstrably
+reaches the host through it. One piece is still
 unconfirmed: that browser did not install the sensor from its preinstall manifest, and
 why is an open question.
 

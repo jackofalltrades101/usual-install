@@ -86,8 +86,10 @@ def _print_status(st):
     term.section("Browsers")
     for name in st.get("browsers", []):
         term.row(name, term.good("set up"))
+    ready = set(st.get("flatpak_ready", []))
     for name in st.get("flatpak_browsers", []):
-        term.row(f"{name} (Flatpak)", term.warn("needs: usual-provision install --flatpak"))
+        term.row(f"{name} (Flatpak)", term.good("set up") if name in ready
+                 else term.warn("being set up"))
     for name in st.get("snap_browsers", []):
         term.row(f"{name} (Snap)", term.bad("cannot be supported"))
 

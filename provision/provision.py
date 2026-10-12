@@ -74,16 +74,43 @@ FLATPAK_BROWSERS = {
 SNAP_BROWSERS = ("chromium", "brave", "opera", "vivaldi")
 
 
-def flatpak_browsers():
-    """Installed Flatpak browsers. These ARE provisionable -- see provision_flatpak."""
+def flatpak_browsers(home=None):
+    """Installed Flatpak browsers for one user. These ARE provisionable.
+
+    Looks at the system installation and that user's own; `home` defaults to
+    the current user's.
+    """
+    home = pathlib.Path(home or os.path.expanduser("~"))
     out = []
     for app_id, (name, cfg) in FLATPAK_BROWSERS.items():
-        for root in ("/var/lib/flatpak/app", os.path.expanduser("~/.local/share/flatpak/app")):
-            if pathlib.Path(root, app_id).exists():
+        for root in (pathlib.Path("/var/lib/flatpak/app"), home / ".local/share/flatpak/app"):
+            if (root / app_id).exists():
                 out.append({"app_id": app_id, "name": name, "config": cfg,
-                            "base": pathlib.Path(os.path.expanduser(f"~/.var/app/{app_id}"))})
+                            "base": home / ".var" / "app" / app_id})
                 break
     return out
+
+
+def flatpak_state(home, ext_id, with_crx):
+    """For each Flatpak browser of this user: is it fully set up?
+
+    Read-only, so usuald can ask it as root for every user and only run the
+    setup -- as that user -- where something is missing.
+    """
+    home = pathlib.Path(home)
+    state = []
+    for b in flatpak_browsers(home):
+        override = home / ".local/share/flatpak/overrides" / b["app_id"]
+        try:
+            granted = "org.freedesktop.Flatpak" in override.read_text()
+        except OSError:
+            granted = False
+        cfg = b["base"] / "config" / b["config"]
+        host = (cfg / "NativeMessagingHosts" / f"{HOST_NAME}.json").is_file()
+        ext = (not with_crx) or (cfg / "External Extensions" / f"{ext_id}.json").is_file()
+        state.append({"name": b["name"], "app_id": b["app_id"],
+                      "ready": granted and host and ext})
+    return state
 
 
 def snap_browsers():
@@ -285,8 +312,8 @@ def cmd_install(args):
             print(f"  flatpak      {'->' if ok_ else '!!'} {name}: {detail}")
             wrote += 1 if ok_ else 0
     elif flatpak_browsers():
-        print(f"  flatpak      .. {len(flatpak_browsers())} flatpak browser(s) "
-              f"skipped; rerun with --flatpak")
+        print(f"  flatpak      .. {len(flatpak_browsers())} flatpak browser(s) left to "
+              f"usuald, which sets them up automatically")
     for n in snap_browsers():
         print(f"  snap         !! {n} cannot be supported; install a non-snap build")
 
@@ -295,6 +322,19 @@ def cmd_install(args):
         return 1
     print(f"\nprovisioned {wrote} location(s). Restart the browser to pick it up.")
     return 0
+
+
+def cmd_flatpak(args):
+    """Set up this user's Flatpak browsers only. usuald runs this as each user."""
+    ext_id = args.extension_id or current_extension_id()
+    if not ext_id:
+        print("no extension id", file=sys.stderr)
+        return 1
+    ok = True
+    for name, ok_, detail in provision_flatpak(ext_id, args.crx):
+        print(f"  flatpak      {'->' if ok_ else '!!'} {name}: {detail}")
+        ok = ok and ok_
+    return 0 if ok else 1
 
 
 def cmd_uninstall(args):
@@ -362,7 +402,7 @@ def cmd_status(args):
             live = (b["base"] / "config" / b["config"] /
                     "NativeMessagingHosts" / f"{HOST_NAME}.json").exists()
             term.row(b["name"], term.good("set up") if live
-                     else term.warn("needs: usual-provision install --flatpak"))
+                     else term.warn("not set up yet; the service does this within a minute"))
     snaps = snap_browsers()
     if snaps:
         term.section(f"Snap browsers ({len(snaps)})")
@@ -389,6 +429,12 @@ def main():
     i.add_argument("--crx", help="packed sensor.crx, required with --preinstall")
     i.add_argument("--extension-id")
     i.set_defaults(func=cmd_install)
+
+    f = sub.add_parser("flatpak", help="set up this user's Flatpak browsers only "
+                                       "(usuald does this automatically)")
+    f.add_argument("--crx", help="packed sensor.crx to preinstall inside the sandbox")
+    f.add_argument("--extension-id")
+    f.set_defaults(func=cmd_flatpak)
 
     u = sub.add_parser("uninstall", help="remove everything we wrote")
     u.set_defaults(func=cmd_uninstall)

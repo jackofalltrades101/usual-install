@@ -6,9 +6,6 @@ post_install() {
   echo
   echo "Usual Install is running. Restart your browser and visit a download page."
   echo
-  echo "Flatpak browsers need one extra step (no root required):"
-  echo "    usual-provision install --flatpak"
-  echo
   echo "To turn it off: systemctl disable --now usuald.service"
   echo
 }
