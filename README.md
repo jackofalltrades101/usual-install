@@ -27,26 +27,71 @@ later, with **no browser extension for the user to find or install**.
 
 ## Install
 
+There is no published package yet, so you build it. You need `python3`,
+`flatpak`, `polkit`, GTK 4 with its Python bindings, and any Chromium-family
+browser (used to pack the extension).
+
 ```sh
-# Arch
-makepkg -si -p packaging/arch/PKGBUILD
+git clone https://github.com/jackofalltrades101/usual-install
+cd usual-install
 
-# Debian / Ubuntu
-dpkg-buildpackage -us -uc -b        # with packaging/debian/ as debian/
+make all        # generates a signing key, builds and SIGNS the catalogue,
+                # packs the extension. ~11 MB download, a minute or two.
+```
 
-# Fedora
-rpmbuild -ba packaging/fedora/usual-install.spec
+`make all` is not optional. A fresh clone contains no catalogue and no signing
+key — both are build output, and the daemon refuses an unsigned catalogue, so
+skipping this leaves you with a service that resolves nothing.
 
-# or straight from the tree
+Then either install straight from the tree:
+
+```sh
 sudo make install
 sudo systemctl enable --now usuald.service
 ```
 
-Flatpak browsers need one extra step, which needs no root:
+or build a real package, which is preferable because uninstall is then clean:
 
 ```sh
-usual-provision install --flatpak
+# Debian / Ubuntu
+cp -a packaging/debian debian && dpkg-buildpackage -us -uc -b
+sudo apt install ../usual-install_*.deb
+
+# Fedora
+rpmbuild -ba packaging/fedora/usual-install.spec
+
+# Arch
+cp packaging/arch/PKGBUILD . && makepkg -si
 ```
+
+Then, once:
+
+```sh
+sudo systemctl enable --now usuald.service   # provisions every browser it finds
+usual-provision install --flatpak            # only if you have Flatpak browsers; no root
+```
+
+Restart your browser. Nothing else is needed — there is no extension to install,
+and browsers added later are picked up automatically.
+
+### Who holds the signing key
+
+`make all` generates a keypair and signs the catalogue with it, so a self-built
+installation trusts its own build. That is the right default for one machine and
+the wrong one for distribution: anyone shipping this to other people replaces
+`catalogue/signing.pub` with their own public key, keeps the private half
+offline, and signs catalogues there. Neither half is in the repository.
+
+### Updates
+
+`catalogue_url` in `/etc/usual-install/config.json` is empty, because nobody is
+hosting a catalogue yet. Set it and enable the timer to receive updates:
+
+```sh
+sudo systemctl enable --now usual-install-update.timer
+```
+
+Until then the catalogue is whatever `make all` produced, and will go stale.
 
 ## How resolution works
 

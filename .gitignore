@@ -3,8 +3,11 @@ catalogue/catalogue.json
 compat/compat.json
 # Signing key for the extension id. Losing it changes the id for every user.
 keys/sensor.pem
-# Catalogue signing key. The public half (catalogue/signing.pub) DOES ship.
+# Catalogue signing keypair. Both halves are build output: `make catalogue`
+# generates them if absent. A distributor ships their own signing.pub in the
+# package and keeps the private half offline.
 keys/catalogue-signing.key
+catalogue/signing.pub
 *.json.sig
 sensor.crx
 __pycache__/

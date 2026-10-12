@@ -27,20 +27,38 @@ SIGNING_KEY ?= keys/catalogue-signing.key
 
 all: catalogue crx
 
-catalogue:
-	python3 catalogue/build_catalogue.py -o catalogue/catalogue.json \
-	        $(if $(wildcard $(SIGNING_KEY)),--sign-key $(SIGNING_KEY),)
-	python3 compat/build_compat.py -o compat/compat.json
-	$(if $(wildcard $(SIGNING_KEY)),python3 catalogue/sign.py sign compat/compat.json --key $(SIGNING_KEY),@echo "no signing key; catalogues are unsigned")
+# A catalogue the daemon will refuse is worse than no catalogue, and an
+# unsigned one is refused. So signing is not optional here: if no key exists,
+# generate one. A self-built installation trusts its own key; a distributor
+# replaces catalogue/signing.pub with theirs and keeps the private half offline.
+$(SIGNING_KEY):
+	@echo "No signing key found. Generating one for this build."
+	@echo "The catalogue decides what gets installed, so it must be signed;"
+	@echo "keep $(SIGNING_KEY) private and do not commit it."
+	python3 catalogue/sign.py keygen --key $(SIGNING_KEY)
 
-crx:
-	@command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 \
-	  || { echo "chromium is needed to pack the extension"; exit 1; }
+catalogue: $(SIGNING_KEY)
+	python3 catalogue/build_catalogue.py -o catalogue/catalogue.json --sign-key $(SIGNING_KEY)
+	python3 compat/build_compat.py -o compat/compat.json
+	python3 catalogue/sign.py sign compat/compat.json --key $(SIGNING_KEY)
+	python3 catalogue/sign.py verify catalogue/catalogue.json
+
+# Any Chromium-family browser can pack the extension, not just chromium.
+PACKER = $(firstword $(foreach b,chromium chromium-browser brave-browser \
+            vivaldi-stable google-chrome-stable microsoft-edge-stable, \
+            $(shell command -v $(b) 2>/dev/null)))
+
+crx: $(SIGNING_KEY)
+	@test -n "$(PACKER)" || { \
+	  echo "No Chromium-family browser found to pack the extension."; \
+	  echo "Install one of: chromium, brave-browser, vivaldi-stable,"; \
+	  echo "google-chrome-stable, microsoft-edge-stable."; exit 1; }
+	@echo "packing with $(PACKER)"
 	python3 provision/provision.py keygen >/dev/null 2>&1 || true
-	$$(command -v chromium || command -v chromium-browser) \
-	  --pack-extension=$(CURDIR)/sensor \
-	  --pack-extension-key=$(CURDIR)/keys/sensor.pem --no-sandbox >/dev/null 2>&1 || true
-	@test -f sensor.crx && echo "packed sensor.crx" || echo "sensor.crx not produced"
+	-$(PACKER) --pack-extension=$(CURDIR)/sensor \
+	  --pack-extension-key=$(CURDIR)/keys/sensor.pem --no-sandbox >/dev/null 2>&1
+	@test -f sensor.crx && echo "packed sensor.crx" \
+	  || { echo "sensor.crx was not produced"; exit 1; }
 
 check:
 	bash test/run.sh
