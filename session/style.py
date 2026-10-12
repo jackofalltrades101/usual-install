@@ -141,6 +141,7 @@ def shell(window, width=500):
     """Header, body and footer boxes inside a styled window. Returns them."""
     apply()
     window.add_css_class("usual")
+    window.set_icon_name("usual-install")
     window.set_default_size(width, -1)
     window.set_resizable(False)
     root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)

@@ -321,47 +321,53 @@ def cmd_uninstall(args):
 
 
 def cmd_status(args):
+    sys.path.insert(0, str(ROOT / "daemon"))
+    import term
     ext_id = current_extension_id()
-    print(f"extension id : {ext_id or '(none — run keygen)'}")
-    print(f"session agent: {ROOT / 'session' / 'usual-session'}")
+    term.heading("Usual Install browser setup")
+    term.row("Extension ID", ext_id or term.bad("none (run: usual-provision keygen)"))
+    term.row("Session agent", str(ROOT / "session" / "usual-session"))
     cat = ROOT / "catalogue" / "catalogue.json"
     if cat.is_file():
         data = json.loads(cat.read_text())
-        print(f"catalogue    : {len(data.get('hosts', {}))} hostnames, "
-              f"{len(data.get('domains', {}))} domains, generated {data.get('generated')}")
+        term.row("Catalogue", f"{len(data.get('hosts', {}))} websites, "
+                              f"built {data.get('generated')}")
     else:
-        print("catalogue    : missing — run catalogue/build_catalogue.py")
-
-    fp = flatpak_browsers()
-    if fp:
-        print(f"\n{len(fp)} flatpak browser(s) — provisionable with: install --flatpak")
-        for b in fp:
-            live = (b["base"] / "config" / b["config"] /
-                    "NativeMessagingHosts" / f"{HOST_NAME}.json").exists()
-            print(f"  {b['name']:16} {b['app_id']:24} "
-                  f"{'provisioned' if live else 'not provisioned'}")
-    snaps = snap_browsers()
-    if snaps:
-        print(f"\n{len(snaps)} snap browser(s) — NOT supportable:")
-        for n in snaps:
-            print(f"  {n:16} snap confinement gives no way to reach a host binary.")
-            print(f"                   Install a non-snap build to use Usual Install.")
+        term.row("Catalogue", term.warn("not built here (make catalogue)"))
 
     found = detected()
-    print(f"\n{len(found)} browser(s) detected:")
+    term.section(f"Browsers ({len(found)})")
     for b in found:
         user_host = (b["user_nmh"] / f"{HOST_NAME}.json").exists()
         sys_host = any((d / f"{HOST_NAME}.json").exists() for d in b["system_nmh"])
         pre = bool(ext_id) and (
             (b["user_ext"] / f"{ext_id}.json").exists()
             or any((d / f"{ext_id}.json").exists() for d in b["system_ext"]))
-        flags = []
-        if user_host: flags.append("native host (user)")
-        if sys_host: flags.append("native host (system)")
-        if pre: flags.append("preinstall")
-        if not b["profile_exists"]: flags.append("never launched")
-        print(f"  {b['name']:16} {b['binary'] or '(no binary on PATH)':26} "
-              f"{', '.join(flags) or 'not provisioned'}")
+        if (user_host or sys_host) and pre:
+            state = term.good("set up")
+        elif user_host or sys_host:
+            state = term.warn("connected, extension not yet added")
+        else:
+            state = term.bad("not set up")
+        if not b["profile_exists"]:
+            state += term.muted(", never opened")
+        term.row(b["name"], f"{state}  {term.muted(b['binary'] or 'not on PATH')}")
+    if not found:
+        term.row("", term.muted("no Chromium-based browser found"))
+
+    fp = flatpak_browsers()
+    if fp:
+        term.section(f"Flatpak browsers ({len(fp)})")
+        for b in fp:
+            live = (b["base"] / "config" / b["config"] /
+                    "NativeMessagingHosts" / f"{HOST_NAME}.json").exists()
+            term.row(b["name"], term.good("set up") if live
+                     else term.warn("needs: usual-provision install --flatpak"))
+    snaps = snap_browsers()
+    if snaps:
+        term.section(f"Snap browsers ({len(snaps)})")
+        for n in snaps:
+            term.row(n, term.bad("cannot be supported; install a non-Snap version"))
     return 0
 
 

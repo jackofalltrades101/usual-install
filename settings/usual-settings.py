@@ -49,6 +49,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         super().__init__(application=app, title="Usual Install")
         style.apply()
         self.add_css_class("usual")
+        self.set_icon_name("usual-install")
         self.set_default_size(620, 680)
         self.status = None
         self.config = {}

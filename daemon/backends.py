@@ -219,16 +219,19 @@ def run_streaming(cmd, env=None):
 
 
 def main():
+    import term
     fam = distro_family()
     info = os_release()
-    print(f"distro : {info.get('PRETTY_NAME', '?')}  (family: {fam})")
-    print("backends:")
+    term.heading("Install methods on this computer")
+    term.row("Distribution", f"{info.get('PRETTY_NAME', '?')} ({fam} family)")
+    term.section("Methods")
     for b in ALL:
-        mark = "available" if b.available() else "-"
-        priv = "needs root" if b.needs_privilege else "rootless"
-        print(f"  {b.name:14} {mark:10} {priv}")
+        mark = term.good("available") if b.available() else term.muted("not installed")
+        priv = "asks for a password" if b.needs_privilege else "no password"
+        term.row(b.name, f"{mark}  {term.muted(priv)}")
     nb = native_backend()
-    print(f"\nnative backend for this machine: {nb.name if nb else 'none'}")
+    term.section("System packages")
+    term.row("Uses", nb.name if nb else term.muted("none on this system"))
     return 0
 
 
