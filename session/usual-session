@@ -18,11 +18,12 @@ sys.path.insert(0, str(HERE.parent / "resolver"))
 sys.path.insert(0, str(HERE.parent / "compat"))
 sys.path.insert(0, str(HERE.parent / "catalogue"))
 sys.path.insert(0, str(HERE.parent / "daemon"))
-from resolve import resolve, looks_installable, looks_windows  # noqa: E402
+from resolve import resolve, rank, looks_installable, looks_windows  # noqa: E402
 from match import match as compat_match  # noqa: E402
 from runners import detect_host, choose_runner  # noqa: E402
 from sign import verify as verify_signature  # noqa: E402
 import client as daemon_client  # noqa: E402
+import aur  # noqa: E402
 
 CATALOGUE_PATHS = [
     os.environ.get("USUAL_CATALOGUE"),
@@ -213,6 +214,8 @@ def handle(msg, catalogue, compat):
     except Exception as e:
         log(f"daemon resolve failed ({e!r}); using the local catalogue")
         candidates, reason = resolve(page_url, catalogue)
+    # AUR packages only where they can be built; best source first.
+    candidates = rank(candidates, aur_ok=aur.can_build())
     log(f"{page_url} -> {len(candidates)} candidate(s) [{reason}]")
     if not candidates:
         return {"action": "ignore", "reason": reason}

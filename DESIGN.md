@@ -379,8 +379,14 @@ project free of third-party dependencies.
 a desktop entry and icons. Flatpak browser provisioning, rootlessly.
 
 Still open: catalogue governance (who holds the key, who may add an entry, how revocation
-works), and AUR as a backend — Arch native installs currently come from the official
-repositories only.
+works).
+
+**AUR backend. Built.** Vetted AUR packages (maintained, not out of date, not VCS, at
+least 10 votes, URL on the vendor's site, the most-voted per site) are part of the signed
+catalogue. The session agent builds as the user after re-checking the maintainer; usuald
+installs official-repository dependencies under the normal action and the built package
+under `org.usualinstall.install-aur`, which asks for a password every time, after copying
+it out of the user's reach and checking its name. AUR-to-AUR dependency chains are refused.
 
 Catalogue signing landed early and is enforced everywhere: an Ed25519 signature is
 verified before every use, and anything that fails is replaced with an empty catalogue

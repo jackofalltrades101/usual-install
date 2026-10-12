@@ -11,6 +11,9 @@ import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
 APPSTREAM = "https://dl.flathub.org/repo/appstream/{arch}/appstream.xml.gz"
+AUR_META = "https://aur.archlinux.org/packages-meta-v1.json.gz"
+AUR_MIN_VOTES = 10
+AUR_VCS = ("-git", "-hg", "-svn", "-bzr", "-darcs", "-fossil", "-cvs")
 APP_TYPES = {"desktop-application", "console-application", "desktop"}
 
 # Registrable-domain suffixes needing three labels. A real deployment should use
@@ -170,6 +173,82 @@ def build(xml_bytes, remote):
     )
 
 
+def fetch_aur():
+    sys.stderr.write(f"fetching {AUR_META}\n")
+    req = urllib.request.Request(AUR_META, headers={"User-Agent": "usual-install"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        raw = r.read()
+    sys.stderr.write(f"  {len(raw)/1e6:.1f} MB compressed\n")
+    return json.loads(gzip.decompress(raw))
+
+
+def aur_entries(meta, min_votes=AUR_MIN_VOTES):
+    """Vetted AUR packages, keyed like Flathub entries by their declared URL.
+
+    The AUR's URL field is set by whoever maintains the package, so the bar is
+    higher than for Flathub: maintained, not flagged out of date, not a VCS
+    build, at least `min_votes` votes. Where several packages claim the same
+    site and path (minecraft-launcher and a fork, say), only the most-voted is
+    kept: this is "the AUR's package for that site", not a search result.
+    """
+    best = {}
+    stats = collections.Counter()
+    for p in meta:
+        name, url = p.get("Name") or "", p.get("URL") or ""
+        if not p.get("Maintainer"):
+            stats["orphaned"] += 1; continue
+        if p.get("OutOfDate"):
+            stats["out_of_date"] += 1; continue
+        if name.endswith(AUR_VCS):
+            stats["vcs"] += 1; continue
+        if (p.get("NumVotes") or 0) < min_votes:
+            stats["few_votes"] += 1; continue
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            stats["bad_url"] += 1; continue
+        if not parsed.hostname or parsed.scheme not in ("http", "https"):
+            stats["bad_url"] += 1; continue
+        key = (norm_host(parsed.hostname), norm_path(parsed.path))
+        if key in best and best[key]["votes"] >= p["NumVotes"]:
+            continue
+        best[key] = {
+            "id": f"aur:{name}",
+            "name": name,
+            "summary": p.get("Description") or "",
+            "backend": "aur",
+            "aur_name": name,
+            "pkgbase": p.get("PackageBase") or name,
+            "maintainer": p["Maintainer"],
+            "votes": p["NumVotes"],
+            "updated": p.get("LastModified"),
+            "snapshot": p.get("URLPath") or "",
+            "host": key[0],
+            "path": key[1],
+            "registrable": registrable(parsed.hostname),
+        }
+    stats["kept"] = len(best)
+    return list(best.values()), stats
+
+
+def merge_aur(hosts, domains, entries):
+    for e in entries:
+        host, dom = e.pop("host"), e.pop("registrable")
+        # Show the product's real name, not the package name: if exactly one
+        # Flathub app claims the same site and path, the AUR entry is the same
+        # program ("Minecraft", not "minecraft-launcher").
+        same = {x["name"] for x in hosts.get(host, [])
+                if x.get("backend") == "flatpak" and x.get("path", "") == e["path"]}
+        if len(same) == 1:
+            e["name"] = same.pop()
+        hosts.setdefault(host, []).append(e)
+        domains.setdefault(dom, []).append(e)
+    key = lambda e: (e.get("path", ""), e["id"])
+    for bucket in (hosts, domains):
+        for k in bucket:
+            bucket[k] = sorted(bucket[k], key=key)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", default="catalogue.json")
@@ -177,6 +256,10 @@ def main():
     ap.add_argument("--remote", default="flathub")
     ap.add_argument("--from-file", help="use a local appstream.xml instead of fetching")
     ap.add_argument("--sign-key", help="Ed25519 private key; writes <out>.sig alongside")
+    ap.add_argument("--no-aur", action="store_true",
+                    help="leave AUR packages out of the catalogue")
+    ap.add_argument("--aur-from-file",
+                    help="use a local packages-meta-v1.json instead of fetching")
     ap.add_argument("--max-candidates", type=int, default=8,
                     help="buckets larger than this are treated as shared hosting "
                          "and never resolved (github.com, sourceforge.net, ...)")
@@ -188,6 +271,14 @@ def main():
         xml_bytes = fetch(args.arch)
 
     hosts, domains, stats = build(xml_bytes, args.remote)
+    aur_stats = None
+    if not args.no_aur:
+        if args.aur_from_file:
+            meta = json.loads(pathlib.Path(args.aur_from_file).read_text())
+        else:
+            meta = fetch_aur()
+        entries, aur_stats = aur_entries(meta)
+        merge_aur(hosts, domains, entries)
     catalogue = {
         "schema": 1,
         "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -214,6 +305,11 @@ def main():
         f"  skipped: {stats['skipped_no_homepage']} without homepage, "
         f"{stats['skipped_not_app']} non-application\n"
     )
+    if aur_stats is not None:
+        sys.stderr.write(
+            f"  AUR: kept {aur_stats['kept']} (dropped {aur_stats['few_votes']} with "
+            f"<{AUR_MIN_VOTES} votes, {aur_stats['vcs']} VCS, {aur_stats['orphaned']} "
+            f"orphaned, {aur_stats['out_of_date']} out of date)\n")
 
 
 if __name__ == "__main__":

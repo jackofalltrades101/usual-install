@@ -4,7 +4,7 @@
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
   <vendor>Usual Install</vendor>
-  <vendor_url>https://example.invalid/usual-install</vendor_url>
+  <vendor_url>https://github.com/jackofalltrades101/usual-install</vendor_url>
 
   <!--
     One narrow action. The caller may ask to install a package that the signed
@@ -21,6 +21,22 @@
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <!--
+    Installing a package built from an AUR build script. That script was
+    written by a community member, not the distribution, so this asks for a
+    password every time and is never remembered for the session: the same
+    moment of consent as the UAC prompt a Windows installer shows.
+  -->
+  <action id="org.usualinstall.install-aur">
+    <description>Install an application built from the AUR</description>
+    <message>Authentication is required to install an application built from a community (AUR) build script</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
     </defaults>
   </action>
 

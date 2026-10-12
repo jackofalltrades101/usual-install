@@ -27,11 +27,16 @@ sys.path.insert(0, str(HERE.parent / "catalogue"))
 sys.path.insert(0, str(HERE.parent / "provision"))
 
 import backends  # noqa: E402
+import aur  # noqa: E402
 from resolve import resolve, registrable  # noqa: E402
 from sign import verify as verify_signature  # noqa: E402
 
 VERSION = "0.2.0"
 POLKIT_ACTION = "org.usualinstall.install"
+# Installing something built from an AUR script asks for a password every time:
+# the equivalent of the UAC prompt a Windows .exe installer shows.
+POLKIT_AUR_ACTION = "org.usualinstall.install-aur"
+AUR_STAGING = pathlib.Path(os.environ.get("USUAL_AUR_STAGING", "/var/cache/usual-install/aur"))
 
 RUN_DIR = pathlib.Path(os.environ.get("USUAL_RUN_DIR", "/run/usual-install"))
 SOCKET_PATH = RUN_DIR / "usuald.sock"
@@ -336,9 +341,132 @@ class Daemon:
             return
         send({"type": "done", "ok": True, "config": self.config})
 
+    # ---- AUR ------------------------------------------------------------
+    #
+    # The session agent builds AUR packages as the user; the daemon only ever
+    # (a) installs official-repository dependencies for a catalogued AUR entry
+    # and (b) installs the package the user built, after checking it is the
+    # one the catalogue names. Neither accepts anything outside the catalogue.
+
+    def _aur_entry(self, req, send):
+        self.catalogue.maybe_reload()
+        entry = self.catalogue.entry_for(req.get("id") or "")
+        if not entry or entry.get("backend") != "aur":
+            send({"type": "done", "ok": False,
+                  "reason": f"{req.get('id')!r} is not an AUR package in the verified catalogue"})
+            return None
+        if not aur.can_build():
+            send({"type": "done", "ok": False, "reason": "this system cannot build AUR packages"})
+            return None
+        return entry
+
+    def _stream(self, cmd, send):
+        send({"type": "log", "line": "$ " + " ".join(cmd) + "\n"})
+        gen = backends.run_streaming(cmd)
+        rc = 0
+        try:
+            while True:
+                kind, payload = next(gen)
+                send({"type": kind, ("line" if kind == "log" else "pct"): payload})
+        except StopIteration as stop:
+            rc = stop.value or 0
+        return rc
+
+    def op_aur_deps(self, req, peer, send):
+        """Install official-repository dependencies of a catalogued AUR package."""
+        entry = self._aur_entry(req, send)
+        if not entry:
+            return
+        deps = req.get("deps") or []
+        if not isinstance(deps, list) or not deps or len(deps) > 200:
+            send({"type": "done", "ok": False, "reason": "no dependencies to install"})
+            return
+        for d in deps:
+            if not isinstance(d, str) or not aur.valid_name(d):
+                send({"type": "done", "ok": False, "reason": f"bad dependency name {d!r}"})
+                return
+            # -Sp resolves providers (java-runtime -> a JRE) and touches nothing.
+            r = subprocess.run(["pacman", "-Sp", "--noconfirm", "--print-format", "%n", "--", d],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                send({"type": "done", "ok": False,
+                      "reason": f"{d} is not in the official repositories"})
+                return
+        allowed, why = polkit_allows(peer["pid"], peer["uid"])
+        if not allowed:
+            send({"type": "done", "ok": False, "reason": why})
+            return
+        if not self.install_lock.acquire(blocking=False):
+            send({"type": "done", "ok": False, "reason": "another install is in progress"})
+            return
+        try:
+            rc = self._stream(["pacman", "-S", "--needed", "--asdeps", "--noconfirm", "--", *deps],
+                              send)
+            send({"type": "done", "ok": rc == 0,
+                  "reason": "dependencies installed" if rc == 0 else f"pacman exited {rc}"})
+        finally:
+            self.install_lock.release()
+
+    def op_install_aur(self, req, peer, send):
+        """Install the package the caller built for a catalogued AUR entry."""
+        import pwd, tempfile
+        entry = self._aur_entry(req, send)
+        if not entry:
+            return
+        if peer["uid"] < 0:
+            send({"type": "done", "ok": False, "reason": "unknown caller"})
+            return
+        paths = req.get("paths") or []
+        if not isinstance(paths, list) or not paths or len(paths) > 10:
+            send({"type": "done", "ok": False, "reason": "no built package given"})
+            return
+        home = pwd.getpwuid(peer["uid"]).pw_dir
+        for path in paths:
+            ok, why = aur.validate_built_path(str(path), home, entry["pkgbase"], uid=peer["uid"])
+            if not ok:
+                send({"type": "done", "ok": False, "reason": f"refusing {path}: {why}"})
+                return
+
+        allowed, why = polkit_allows(peer["pid"], peer["uid"], action=POLKIT_AUR_ACTION)
+        if not allowed:
+            send({"type": "done", "ok": False, "reason": why})
+            return
+        if not self.install_lock.acquire(blocking=False):
+            send({"type": "done", "ok": False, "reason": "another install is in progress"})
+            return
+        try:
+            # Copy first, then inspect the copy: the user can change their own
+            # files at any moment, but not these.
+            AUR_STAGING.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with tempfile.TemporaryDirectory(dir=AUR_STAGING) as stage:
+                chosen = None
+                for path in paths:
+                    src = pathlib.Path(path)
+                    dst = pathlib.Path(stage) / src.name
+                    fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(fd, "rb") as fin, open(dst, "wb") as fout:
+                        shutil.copyfileobj(fin, fout)
+                    name = aur.package_name_of(dst)
+                    if name == entry["aur_name"]:
+                        chosen = dst
+                if not chosen:
+                    send({"type": "done", "ok": False,
+                          "reason": f"none of the built files is {entry['aur_name']}"})
+                    return
+                send({"type": "log", "line": f"verified {chosen.name} is "
+                                             f"{entry['aur_name']}\n"})
+                rc = self._stream(["pacman", "-U", "--noconfirm", "--", str(chosen)], send)
+            self.history.append({"id": entry["id"], "backend": "aur", "rc": rc,
+                                 "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+            send({"type": "done", "ok": rc == 0, "rc": rc,
+                  "reason": "installed" if rc == 0 else f"pacman exited {rc}"})
+        finally:
+            self.install_lock.release()
+
     OPS = {"status": op_status, "resolve": op_resolve, "install": op_install,
            "provision": op_provision, "config-get": op_config_get,
-           "config-set": op_config_set}
+           "config-set": op_config_set, "aur-deps": op_aur_deps,
+           "install-aur": op_install_aur}
 
     # -- provisioning -------------------------------------------------------
 

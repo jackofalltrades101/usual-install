@@ -65,6 +65,7 @@ else
 fi
 python3 compat/runners.py --self-test >$LOGDIR/runners.log 2>&1 && ok "runner selection" || { bad "runner selection"; tail -20 $LOGDIR/runners.log; }
 python3 compat/match.py --self-test >$LOGDIR/match.log 2>&1 && ok "name matching" || { bad "name matching"; tail -20 $LOGDIR/match.log; }
+python3 daemon/aur.py --self-test >$LOGDIR/aur.log 2>&1 && ok "AUR checks" || { bad "AUR checks"; tail -20 $LOGDIR/aur.log; }
 python3 test/compat_setup_test.py >$LOGDIR/csetup.log 2>&1 && ok "setup orchestration (stub runners, real subprocesses)" || { bad "setup orchestration"; tail -20 $LOGDIR/csetup.log; }
 printf '   this machine: '; python3 compat/runners.py | tr '\n' ' ' | sed 's/this machine: //'; echo
 
