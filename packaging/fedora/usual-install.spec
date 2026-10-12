@@ -4,7 +4,7 @@ Release:        1%{?dist}
 Summary:        Install applications from vendor download pages using your package manager
 
 License:        MIT
-URL:            https://example.invalid/usual-install
+URL:            https://github.com/jackofalltrades101/usual-install
 Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch

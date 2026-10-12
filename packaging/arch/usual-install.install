@@ -10,9 +10,11 @@ post_install() {
   echo "Flatpak browsers need one extra step (no root required):"
   echo "    usual-provision install --flatpak"
   echo
-  echo "To receive catalogue updates, set catalogue_url in"
-  echo "/etc/usual-install/config.json and run:"
+  echo "To receive weekly catalogue updates:"
   echo "    systemctl enable --now usual-install-update.timer"
+  echo "(Release packages already point catalogue_url at the published"
+  echo "catalogue. For a self-built package, set it in"
+  echo "/etc/usual-install/config.json first.)"
   echo
 }
 

@@ -17,3 +17,6 @@ test/screenshots/
 # Core dumps from emulated test runs
 *.core
 core
+
+# macOS folder metadata
+.DS_Store
