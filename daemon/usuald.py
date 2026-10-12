@@ -177,6 +177,16 @@ class Daemon:
 
     def op_status(self, req, peer, send):
         import provision as prov
+        # Flatpak browsers are per user: report the caller's own.
+        fp_state = []
+        try:
+            import pwd
+            if peer.get("uid", -1) >= 0:
+                home = pwd.getpwuid(peer["uid"]).pw_dir
+                fp_state = prov.flatpak_state(home, prov.current_extension_id() or "",
+                                              with_crx=prov.find_crx() is not None)
+        except (KeyError, OSError):
+            pass
         send({"type": "done", "ok": True, "status": {
             "version": VERSION,
             "enabled": self.config.get("enabled", True),
@@ -191,7 +201,8 @@ class Daemon:
                                if backends.native_backend() else None),
             "distro": backends.distro_family(),
             "browsers": [b["name"] for b in prov.detected()],
-            "flatpak_browsers": [b["name"] for b in prov.flatpak_browsers()],
+            "flatpak_browsers": [s["name"] for s in fp_state],
+            "flatpak_ready": [s["name"] for s in fp_state if s["ready"]],
             "snap_browsers": prov.snap_browsers(),
             "history": self.history[-20:],
         }})

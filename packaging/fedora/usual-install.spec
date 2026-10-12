@@ -45,6 +45,8 @@ printf 'enable usuald.service\nenable usual-install-update.timer\n' \
 %systemd_post usuald.service usual-install-update.timer
 if [ $1 -eq 1 ]; then
   systemctl start usuald.service usual-install-update.timer >/dev/null 2>&1 || :
+  # Flatpak browsers, once, for every user (each done as that user).
+  usual-provision flatpak --all-users >/dev/null 2>&1 || :
 fi
 
 %preun

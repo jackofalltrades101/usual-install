@@ -126,14 +126,19 @@ class SettingsWindow(Gtk.ApplicationWindow):
         f = group(self.box, "Browsers")
         for name in status.get("browsers", []):
             f.add(name, "Set up")
+        ready = set(status.get("flatpak_ready", []))
         for name in status.get("flatpak_browsers", []):
-            f.add(f"{name} (Flatpak)", "Needs one step: usual-provision install --flatpak")
+            f.add(f"{name} (Flatpak)", "Set up" if name in ready
+                  else "Not set up yet: press Refresh browsers")
         for name in status.get("snap_browsers", []):
             f.add(f"{name} (Snap)", "Cannot be supported; install a non-Snap version")
         if not any((status.get("browsers"), status.get("flatpak_browsers"),
                     status.get("snap_browsers"))):
             f.add("", "No Chromium-based browser found")
-        btn = Gtk.Button(label="Set up browsers again", halign=Gtk.Align.START)
+        btn = Gtk.Button(label="Refresh browsers", halign=Gtk.Align.START,
+                         tooltip_text="Set up every browser again, including ones "
+                                      "installed since Usual Install was. "
+                                      "Same as: usualctl refresh")
         btn.connect("clicked", self.on_provision)
         f.frame.append(btn)
 
@@ -190,13 +195,18 @@ class SettingsWindow(Gtk.ApplicationWindow):
         items = [x.strip() for x in entry.get_text().replace("\n", ",").split(",")]
         self.set_config(ignored_domains=[x for x in items if x])
 
-    def on_provision(self, _b):
+    def on_provision(self, btn):
+        btn.set_sensitive(False)
+        btn.set_label("Refreshing…")
+
         def work():
             try:
-                done, _ = daemon_client.call("provision")
-                GLib.idle_add(self.toast, done.get("reason", "done"))
+                results = daemon_client.refresh_browsers()
+                text = "\n".join(("✓ " if ok else "✕ ") + m for ok, m in results)
+                text += "\n\nRestart your browsers to pick up any changes."
             except Exception as e:
-                GLib.idle_add(self.toast, str(e))
+                text = f"Refreshing failed: {e}"
+            GLib.idle_add(self.toast, text)
             GLib.idle_add(self.refresh)
         threading.Thread(target=work, daemon=True).start()
 

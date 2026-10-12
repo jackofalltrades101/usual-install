@@ -3,11 +3,11 @@ post_install() {
   systemctl daemon-reload 2>/dev/null || true
   systemctl enable --now usuald.service usual-install-update.timer 2>/dev/null \
     || systemctl enable usuald.service usual-install-update.timer 2>/dev/null || true
+  # Flatpak browsers, once, for every user (each done as that user).
+  usual-provision flatpak --all-users >/dev/null 2>&1 || true
   echo
   echo "Usual Install is running. Restart your browser and visit a download page."
-  echo
-  echo "Flatpak browsers need one extra step (no root required):"
-  echo "    usual-provision install --flatpak"
+  echo "Installed a browser later? Run: usualctl refresh"
   echo
   echo "To turn it off: systemctl disable --now usuald.service"
   echo
