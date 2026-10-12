@@ -3,14 +3,19 @@
 #   push a tag vX.Y.Z    -> full release: .pkg.tar.zst, .deb, .rpm, AUR files
 #   weekly / manual run  -> refresh the signed catalogue only
 #
-# Two repository secrets are required. `bash scripts/setup-release-keys.sh` sets
-# them (Settings > Secrets and variables > Actions shows them afterwards):
+# Signing keys come from two repository secrets, which
+# `bash scripts/setup-release-keys.sh` sets:
 #
 #   SENSOR_PEM             contents of keys/sensor.pem   (fixes the extension id)
 #   CATALOGUE_SIGNING_KEY  contents of keys/catalogue-signing.key
 #
 # They are written to disk only in the `prepare` job and deleted before anything
 # leaves it. No package job ever sees them.
+#
+# Without the secrets, a tagged release still builds, using throwaway keys made
+# for that run alone. Those packages work, but they cannot verify catalogue
+# updates (so updates are switched off in them) and their extension id changes
+# once permanent keys exist. The weekly catalogue run does nothing until then.
 
 name: release
 
@@ -34,6 +39,7 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
       is_release: ${{ steps.ver.outputs.is_release }}
+      key_mode: ${{ steps.keys.outputs.mode }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,22 +62,34 @@ jobs:
           fi
           echo "version=$pkgver" >> "$GITHUB_OUTPUT"
 
-      - name: Restore signing keys
+      - name: Get signing keys
+        id: keys
         env:
           SENSOR_PEM: ${{ secrets.SENSOR_PEM }}
           CATALOGUE_SIGNING_KEY: ${{ secrets.CATALOGUE_SIGNING_KEY }}
+          IS_RELEASE: ${{ steps.ver.outputs.is_release }}
         run: |
-          if [ -z "$SENSOR_PEM" ] || [ -z "$CATALOGUE_SIGNING_KEY" ]; then
-            echo "::error::SENSOR_PEM and CATALOGUE_SIGNING_KEY secrets are required"
-            exit 1
-          fi
           umask 077
-          mkdir -p keys
-          printf '%s\n' "$SENSOR_PEM" > keys/sensor.pem
-          printf '%s\n' "$CATALOGUE_SIGNING_KEY" > keys/catalogue-signing.key
-          openssl pkey -in keys/catalogue-signing.key -pubout -out catalogue/signing.pub
+          if [ -n "$SENSOR_PEM" ] && [ -n "$CATALOGUE_SIGNING_KEY" ]; then
+            mkdir -p keys
+            printf '%s\n' "$SENSOR_PEM" > keys/sensor.pem
+            printf '%s\n' "$CATALOGUE_SIGNING_KEY" > keys/catalogue-signing.key
+            openssl pkey -in keys/catalogue-signing.key -pubout -out catalogue/signing.pub
+            echo "mode=permanent" >> "$GITHUB_OUTPUT"
+          elif [ "$IS_RELEASE" = true ]; then
+            mkdir -p keys
+            openssl genrsa -out keys/sensor.pem 2048 2>/dev/null
+            python3 catalogue/sign.py keygen --key keys/catalogue-signing.key >/dev/null
+            python3 provision/provision.py keygen >/dev/null
+            echo "::warning::No signing secrets: built with throwaway keys. Catalogue updates are off in these packages. Run scripts/setup-release-keys.sh once to fix this for later releases."
+            echo "mode=ephemeral" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No signing secrets yet, so there is no catalogue to publish. Run scripts/setup-release-keys.sh once."
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Refuse a sensor key that would change the extension id
+        if: steps.keys.outputs.mode == 'permanent'
         run: |
           pinned=$(cat sensor/extension-id)
           python3 provision/provision.py keygen
@@ -81,6 +99,7 @@ jobs:
             exit 1; }
 
       - name: Build and sign the catalogue
+        if: steps.keys.outputs.mode != 'none'
         run: make catalogue
 
       - name: Pack the browser component
@@ -90,7 +109,7 @@ jobs:
           xvfb-run -a make crx
 
       - name: Point installs at the published catalogue
-        if: steps.ver.outputs.is_release == 'true'
+        if: steps.ver.outputs.is_release == 'true' && steps.keys.outputs.mode == 'permanent'
         run: |
           python3 - <<'EOF'
           import json, os, pathlib
@@ -102,6 +121,7 @@ jobs:
           EOF
 
       - name: Remove the private keys
+        if: always() && steps.keys.outputs.mode != 'none'
         run: |
           shred -u keys/sensor.pem keys/catalogue-signing.key
           rmdir keys
@@ -110,6 +130,7 @@ jobs:
           fi
 
       - name: Publish the catalogue
+        if: steps.keys.outputs.mode == 'permanent'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -210,8 +231,13 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          KEY_MODE: ${{ needs.prepare.outputs.key_mode }}
         run: |
           rm -f dist/tree.tar.gz
           (cd dist && sha256sum * > SHA256SUMS)
+          notes=""
+          if [ "$KEY_MODE" = ephemeral ]; then
+            notes="Built with one-off signing keys: catalogue updates are turned off in these packages, and the browser component's id will change in a later release."
+          fi
           gh release create "$TAG" --repo "${{ github.repository }}" \
-            --title "$TAG" --generate-notes dist/*
+            --title "$TAG" --notes "$notes" --generate-notes dist/*
