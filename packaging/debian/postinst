@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 if [ "$1" = configure ]; then
-  echo "Usual Install is installed. Start it with:"
-  echo "    systemctl enable --now usuald.service"
+  echo "Usual Install is running. Restart your browser and visit a download page."
+  echo "To turn it off: systemctl disable --now usuald.service"
   echo "Flatpak browsers need one extra, rootless step:"
   echo "    usual-provision install --flatpak"
 fi

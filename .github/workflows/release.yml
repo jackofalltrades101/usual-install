@@ -1,0 +1,243 @@
+# Builds the signed catalogue and the distro packages, and publishes them.
+#
+#   push a tag vX.Y.Z    -> full release: .pkg.tar.zst, .deb, .rpm, AUR files
+#   weekly / manual run  -> refresh the signed catalogue only
+#
+# Signing keys come from two repository secrets, which
+# `bash scripts/setup-release-keys.sh` sets:
+#
+#   SENSOR_PEM             contents of keys/sensor.pem   (fixes the extension id)
+#   CATALOGUE_SIGNING_KEY  contents of keys/catalogue-signing.key
+#
+# They are written to disk only in the `prepare` job and deleted before anything
+# leaves it. No package job ever sees them.
+#
+# Without the secrets, a tagged release still builds, using throwaway keys made
+# for that run alone. Those packages work, but they cannot verify catalogue
+# updates (so updates are switched off in them) and their extension id changes
+# once permanent keys exist. The weekly catalogue run does nothing until then.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  schedule:
+    - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/${{ github.repository }}
+  CATALOGUE_TAG: catalogue
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      is_release: ${{ steps.ver.outputs.is_release }}
+      key_mode: ${{ steps.keys.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out what this run is
+        id: ver
+        run: |
+          pkgver=$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)
+          specver=$(sed -n 's/^Version: *//p' packaging/fedora/usual-install.spec)
+          debver=$(head -1 packaging/debian/changelog | sed 's/.*(\(.*\)-[0-9]*).*/\1/')
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            tagver=${GITHUB_REF_NAME#v}
+            for v in "$pkgver" "$specver" "$debver"; do
+              [ "$v" = "$tagver" ] || {
+                echo "::error::tag is $tagver but packaging says PKGBUILD=$pkgver spec=$specver debian=$debver"
+                exit 1; }
+            done
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$pkgver" >> "$GITHUB_OUTPUT"
+
+      - name: Get signing keys
+        id: keys
+        env:
+          SENSOR_PEM: ${{ secrets.SENSOR_PEM }}
+          CATALOGUE_SIGNING_KEY: ${{ secrets.CATALOGUE_SIGNING_KEY }}
+          IS_RELEASE: ${{ steps.ver.outputs.is_release }}
+        run: |
+          umask 077
+          if [ -n "$SENSOR_PEM" ] && [ -n "$CATALOGUE_SIGNING_KEY" ]; then
+            mkdir -p keys
+            printf '%s\n' "$SENSOR_PEM" > keys/sensor.pem
+            printf '%s\n' "$CATALOGUE_SIGNING_KEY" > keys/catalogue-signing.key
+            openssl pkey -in keys/catalogue-signing.key -pubout -out catalogue/signing.pub
+            echo "mode=permanent" >> "$GITHUB_OUTPUT"
+          elif [ "$IS_RELEASE" = true ]; then
+            mkdir -p keys
+            openssl genrsa -out keys/sensor.pem 2048 2>/dev/null
+            python3 catalogue/sign.py keygen --key keys/catalogue-signing.key >/dev/null
+            python3 provision/provision.py keygen >/dev/null
+            echo "::warning::No signing secrets: built with throwaway keys. Catalogue updates are off in these packages. Run scripts/setup-release-keys.sh once to fix this for later releases."
+            echo "mode=ephemeral" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No signing secrets yet, so there is no catalogue to publish. Run scripts/setup-release-keys.sh once."
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refuse a sensor key that would change the extension id
+        if: steps.keys.outputs.mode == 'permanent'
+        run: |
+          pinned=$(cat sensor/extension-id)
+          python3 provision/provision.py keygen
+          git diff --exit-code sensor/extension-id sensor/manifest.json || {
+            echo "::error::SENSOR_PEM gives $(cat sensor/extension-id), but the repository pins $pinned."
+            echo "::error::Every installed browser would see a different extension. Use the original keys/sensor.pem."
+            exit 1; }
+
+      - name: Build and sign the catalogue
+        if: steps.keys.outputs.mode != 'none'
+        run: make catalogue
+
+      - name: Pack the browser component
+        if: steps.ver.outputs.is_release == 'true'
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb >/dev/null
+          xvfb-run -a make crx
+
+      - name: Point installs at the published catalogue
+        if: steps.ver.outputs.is_release == 'true' && steps.keys.outputs.mode == 'permanent'
+        run: |
+          python3 - <<'EOF'
+          import json, os, pathlib
+          p = pathlib.Path("packaging/config.json")
+          c = json.loads(p.read_text())
+          c["catalogue_url"] = (f"{os.environ['REPO_URL']}/releases/download/"
+                                f"{os.environ['CATALOGUE_TAG']}/catalogue.json")
+          p.write_text(json.dumps(c, indent=2) + "\n")
+          EOF
+
+      - name: Remove the private keys
+        if: always() && steps.keys.outputs.mode != 'none'
+        run: |
+          shred -u keys/sensor.pem keys/catalogue-signing.key
+          rmdir keys
+          if grep -rIl --exclude-dir=.git -e 'BEGIN [A-Z ]*PRIVATE KEY-----' . ; then
+            echo "::error::a private key is still in the tree"; exit 1
+          fi
+
+      - name: Publish the catalogue
+        if: steps.keys.outputs.mode == 'permanent'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$CATALOGUE_TAG" >/dev/null 2>&1 || \
+            gh release create "$CATALOGUE_TAG" --prerelease --title "Catalogue" \
+              --notes "The signed application catalogue. Rebuilt weekly; installs fetch it from here."
+          gh release upload "$CATALOGUE_TAG" --clobber \
+            catalogue/catalogue.json catalogue/catalogue.json.sig \
+            compat/compat.json compat/compat.json.sig
+
+      - name: Hand the prepared tree to the package jobs
+        if: steps.ver.outputs.is_release == 'true'
+        run: tar -czf ../tree.tar.gz --exclude=.git . && mv ../tree.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        if: steps.ver.outputs.is_release == 'true'
+        with:
+          name: tree
+          path: tree.tar.gz
+          retention-days: 3
+
+  deb:
+    needs: prepare
+    if: needs.prepare.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: tree }
+      - run: |
+          mkdir src && tar -xzf tree.tar.gz -C src
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends debhelper devscripts fakeroot >/dev/null
+          cd src && cp -a packaging/debian debian && dpkg-buildpackage -us -uc -b
+          mkdir -p ../out && mv ../*.deb ../out/
+      - uses: actions/upload-artifact@v4
+        with: { name: deb, path: out/*.deb }
+
+  rpm:
+    needs: prepare
+    if: needs.prepare.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: tree }
+      - env:
+          VER: ${{ needs.prepare.outputs.version }}
+        run: |
+          dnf install -y -q rpm-build systemd-rpm-macros python3 make tar gzip
+          top=$HOME/rpmbuild
+          mkdir -p "$top"/SOURCES "$top"/SPECS "usual-install-$VER"
+          tar -xzf tree.tar.gz -C "usual-install-$VER"
+          tar -czf "$top/SOURCES/usual-install-$VER.tar.gz" "usual-install-$VER"
+          cp "usual-install-$VER/packaging/fedora/usual-install.spec" "$top/SPECS/"
+          rpmbuild -bb "$top/SPECS/usual-install.spec"
+          mkdir -p out && find "$top/RPMS" -name '*.rpm' -exec mv {} out/ \;
+      - uses: actions/upload-artifact@v4
+        with: { name: rpm, path: out/*.rpm }
+
+  arch:
+    needs: prepare
+    if: needs.prepare.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: tree }
+      - env:
+          VER: ${{ needs.prepare.outputs.version }}
+        run: |
+          pacman -Syu --noconfirm --needed python >/dev/null
+          useradd -m builder
+          mkdir build && tar -xzf tree.tar.gz -C build
+          cp build/packaging/arch/PKGBUILD build/packaging/arch/usual-install.install build/
+          chown -R builder build
+          su builder -c 'cd build && makepkg --nodeps --noconfirm'
+          mkdir -p out && mv build/*.pkg.tar.zst out/
+
+          # The AUR package installs the file above, so its checksum is known now.
+          pkg=$(basename out/*.pkg.tar.zst)
+          sha=$(sha256sum "out/$pkg" | cut -d' ' -f1)
+          mkdir aur && chown builder aur
+          sed -e "s/@VER@/$VER/g" -e "s/@SHA256@/$sha/" \
+              build/packaging/aur/PKGBUILD.in > aur/PKGBUILD
+          cp build/packaging/arch/usual-install.install aur/
+          chown -R builder aur
+          su builder -c 'cd aur && makepkg --printsrcinfo > .SRCINFO'
+          tar -czf "out/aur-usual-install-bin-$VER.tar.gz" -C aur PKGBUILD .SRCINFO usual-install.install
+      - uses: actions/upload-artifact@v4
+        with: { name: arch, path: out/* }
+
+  release:
+    needs: [prepare, deb, rpm, arch]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          KEY_MODE: ${{ needs.prepare.outputs.key_mode }}
+        run: |
+          rm -f dist/tree.tar.gz
+          (cd dist && sha256sum * > SHA256SUMS)
+          notes=""
+          if [ "$KEY_MODE" = ephemeral ]; then
+            notes="Built with one-off signing keys: catalogue updates are turned off in these packages, and the browser component's id will change in a later release."
+          fi
+          gh release create "$TAG" --repo "${{ github.repository }}" \
+            --title "$TAG" --notes "$notes" --generate-notes dist/*

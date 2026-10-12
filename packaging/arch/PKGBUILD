@@ -1,25 +1,29 @@
-# Maintainer: Usual Install
+# Maintainer: Gubran Dormoush <ultrain3 at gmail dot com>
 pkgname=usual-install
 pkgver=0.2.0
 pkgrel=1
 pkgdesc="Install applications from vendor download pages using your package manager"
 arch=('any')
-url="https://example.invalid/usual-install"
+url="https://github.com/jackofalltrades101/usual-install"
 license=('MIT')
 depends=('python' 'python-gobject' 'gtk4' 'flatpak' 'polkit')
 optdepends=(
   'chromium: browser support'
-  'brave-browser: browser support'
+  'brave-bin: browser support'
   'vivaldi: browser support'
 )
-makedepends=('chromium')
 backup=('etc/usual-install/config.json')
 install=usual-install.install
 source=()
 
+# Builds from the tree it sits in, after `make all` (or CI) has produced the
+# signed catalogue and sensor.crx. Like the Debian and Fedora builds, it refuses
+# to package without them rather than regenerate them: regenerating needs the
+# signing key, which a package build should never have.
 build() {
   cd "$startdir"
-  make catalogue crx
+  test -f catalogue/catalogue.json.sig || { echo "catalogue is unsigned; run 'make all' first"; return 1; }
+  test -f sensor.crx || { echo "sensor.crx is missing; run 'make all' first"; return 1; }
 }
 
 package() {

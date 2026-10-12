@@ -1,18 +1,15 @@
 post_install() {
+  # Installing this package is the request to run it.
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl enable --now usuald.service usual-install-update.timer 2>/dev/null \
+    || systemctl enable usuald.service usual-install-update.timer 2>/dev/null || true
   echo
-  echo "Usual Install is installed but not yet running. Start it with:"
-  echo
-  echo "    systemctl enable --now usuald.service"
-  echo
-  echo "It will then provision every Chromium-family browser it finds,"
-  echo "including ones installed later. No browser extension to install."
+  echo "Usual Install is running. Restart your browser and visit a download page."
   echo
   echo "Flatpak browsers need one extra step (no root required):"
   echo "    usual-provision install --flatpak"
   echo
-  echo "To receive catalogue updates, set catalogue_url in"
-  echo "/etc/usual-install/config.json and run:"
-  echo "    systemctl enable --now usual-install-update.timer"
+  echo "To turn it off: systemctl disable --now usuald.service"
   echo
 }
 

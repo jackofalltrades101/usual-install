@@ -1,0 +1,32 @@
+# Maintainer: Gubran Dormoush <ultrain3 at gmail dot com>
+#
+# Template. The release workflow fills in @VER@ and @SHA256@ and attaches the
+# result, with its .SRCINFO, to each GitHub release as aur-usual-install-bin-*.tar.gz.
+# It installs the Arch package built by CI, so nothing is built on the user's
+# machine and no browser is needed to pack the extension.
+pkgname=usual-install-bin
+pkgver=@VER@
+pkgrel=1
+pkgdesc="Install applications from vendor download pages using your package manager"
+arch=('any')
+url="https://github.com/jackofalltrades101/usual-install"
+license=('MIT')
+depends=('python' 'python-gobject' 'gtk4' 'flatpak' 'polkit')
+optdepends=(
+  'chromium: browser support'
+  'brave-bin: browser support'
+  'vivaldi: browser support'
+)
+provides=('usual-install')
+conflicts=('usual-install')
+backup=('etc/usual-install/config.json')
+install=usual-install.install
+_pkgfile="usual-install-${pkgver}-1-any.pkg.tar.zst"
+source=("${_pkgfile}::${url}/releases/download/v${pkgver}/${_pkgfile}")
+noextract=("${_pkgfile}")
+sha256sums=('@SHA256@')
+
+package() {
+  # Everything except pacman's own metadata files (.PKGINFO, .MTREE, ...).
+  bsdtar -xf "${srcdir}/${_pkgfile}" -C "${pkgdir}" --exclude='.*'
+}

@@ -1,10 +1,10 @@
 Source: usual-install
 Section: utils
 Priority: optional
-Maintainer: Usual Install <usual-install@example.invalid>
+Maintainer: Gubran Dormoush <ultrain3@gmail.com>
 Build-Depends: debhelper-compat (= 13), python3, make
 Standards-Version: 4.6.2
-Homepage: https://example.invalid/usual-install
+Homepage: https://github.com/jackofalltrades101/usual-install
 
 Package: usual-install
 Architecture: all

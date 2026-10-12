@@ -49,9 +49,29 @@ installs software because of a web page you visited.
 
 ## Installing
 
-There is no package in any distribution yet, so you build it. You will need
-`python3`, `flatpak`, `polkit`, GTK 4 with its Python bindings, and any
-Chromium-based browser.
+Each [release](https://github.com/jackofalltrades101/usual-install/releases)
+has ready-built packages. Download the one for your distribution, then:
+
+```sh
+# Arch, CachyOS, EndeavourOS
+sudo pacman -U usual-install-*-any.pkg.tar.zst
+
+# Debian, Ubuntu
+sudo apt install ./usual-install_*_all.deb
+
+# Fedora
+sudo dnf install ./usual-install-*.noarch.rpm
+```
+
+That is all: the package starts the service and turns on weekly catalogue
+updates itself. Restart your browser and visit a download page.
+
+To switch it off later: `sudo systemctl disable --now usuald.service`.
+
+### Building it yourself
+
+You will need `python3`, `flatpak`, `polkit`, GTK 4 with its Python bindings, and
+any Chromium-based browser.
 
 ```sh
 git clone https://github.com/jackofalltrades101/usual-install
@@ -76,15 +96,12 @@ cp packaging/arch/PKGBUILD . && makepkg -si
 ```
 
 Or install straight from the tree with `sudo make install`, though uninstalling
-is then your problem.
+is then your problem. A tree install does not start anything; run
+`sudo systemctl enable --now usuald.service` afterwards.
 
-Finally:
-
-```sh
-sudo systemctl enable --now usuald.service
-```
-
-Restart your browser and visit a download page.
+A self-built copy trusts only its own signing key, so it cannot use the
+published catalogue updates; leave `catalogue_url` empty or point it at a
+catalogue you sign yourself.
 
 ### Flatpak browsers
 
@@ -123,8 +140,6 @@ sudo systemctl enable --now usual-install-update.timer
 - **Snap browsers are not supported and cannot be.** Snap confinement gives no
   way to reach a program outside the sandbox. Ubuntu ships Chromium as a snap, so
   on Ubuntu install a `.deb` or Flatpak browser instead.
-- **No catalogue server exists yet**, so `catalogue_url` is empty and your
-  catalogue is whatever `make all` built. It will go stale.
 - **Compatibility coverage is thin.** WineHQ's database has no API, so the
   Windows-application support draws on a much smaller curated list and will
   usually say *not supported* even for programs that run fine.
