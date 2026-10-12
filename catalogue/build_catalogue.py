@@ -93,6 +93,23 @@ def text_of(component, tag):
     return " ".join(chosen.text.split())
 
 
+VERIFIED_KEY = "flathub::verification::verified"
+
+
+def is_verified(component):
+    """Whether Flathub has verified this app's publisher as its developer.
+
+    Flathub records it as <custom><value key="flathub::verification::verified">
+    true</value></custom> (GNOME Software reads the same key). Unverified apps
+    are often community repackages of a vendor's own program -- Minecraft's is --
+    and the installer window must say so rather than imply the vendor ships it.
+    """
+    for v in component.iter("value"):
+        if v.get("key") == VERIFIED_KEY:
+            return (v.text or "").strip().lower() == "true"
+    return False
+
+
 def build(xml_bytes, remote):
     root = ET.parse(io.BytesIO(xml_bytes)).getroot()
     hosts = collections.defaultdict(list)
@@ -124,6 +141,7 @@ def build(xml_bytes, remote):
             "summary": text_of(comp, "summary") or "",
             "backend": "flatpak",
             "remote": remote,
+            "verified": is_verified(comp),
             # A *guess* at the distro package name, never trusted on its own.
             # Before installing it, usuald asks the local package manager what
             # homepage that package declares and requires it to match the

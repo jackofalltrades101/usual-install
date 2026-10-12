@@ -105,10 +105,20 @@ class InstallerWindow(Gtk.ApplicationWindow):
     def refresh_subtitle(self):
         c = self.chosen
         size = c.get("summary") or "No description provided."
+        # Say who actually published it. An unverified Flathub app is usually a
+        # community repackage, and "Flathub" alone reads as more official than
+        # that. Catalogues built before the flag existed show neither line.
+        origin = ""
+        if c.get("verified") is True:
+            origin = "\n✓ Published by the developer (verified on Flathub)"
+        elif c.get("verified") is False:
+            origin = ("\n⚠ Community package: not published or supported by "
+                      "the developer")
         self.subtitle.set_markup(
             f"{GLib.markup_escape_text(size)}\n"
             f"<tt>{GLib.markup_escape_text(c['id'])}</tt> · "
-            f"{GLib.markup_escape_text(c.get('remote', 'flathub'))} · user install")
+            f"{GLib.markup_escape_text(c.get('remote', 'flathub'))} · user install"
+            f"{GLib.markup_escape_text(origin)}")
         self.heading.set_markup(
             f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(c['name'])}</span>")
         self.set_title(f"{c['name']} Installer")
