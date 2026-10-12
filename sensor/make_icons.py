@@ -1,46 +1,75 @@
 #!/usr/bin/env python3
 """Generate the extension's PNG icons.
 
-Chromium wants PNGs and the project has no image library, so this writes them
-directly: a download arrow landing in a package, matching the application icon.
-Small enough to be obvious, and it keeps the build dependency-free.
+Chromium wants PNGs and the project has no image library, so this draws the
+application icon's shapes directly and writes the PNGs itself, keeping the
+build dependency-free.
 """
 import pathlib, struct, sys, zlib
 
-FG = (0x2D, 0x7F, 0xF9, 255)      # the blue used for the primary action
-MUTED = (0x2D, 0x7F, 0xF9, 150)
+# Same shapes and colours as packaging/usual-install.svg, in its 64-unit space:
+# a Breeze blue tile, a white download arrow, a Mint green tray.
+TILE = (0x3D, 0xAE, 0xE9)
+ARROW = (0xFF, 0xFF, 0xFF)
+TRAY = (0xB5, 0xE8, 0xA3)
+SUPERSAMPLE = 6
+
+
+def _in_round_rect(x, y, x0, y0, x1, y1, r, top=True, bottom=True):
+    """Inside a rectangle whose top and/or bottom corners are rounded by r."""
+    if not (x0 <= x <= x1 and y0 <= y <= y1):
+        return False
+    dx = max(x0 + r - x, 0, x - (x1 - r))
+    if y < y0 + r:
+        dy = (y0 + r - y) if top else 0
+    elif y > y1 - r:
+        dy = (y - (y1 - r)) if bottom else 0
+    else:
+        dy = 0
+    return dx * dx + dy * dy <= r * r
+
+
+def _in_triangle(x, y, a, b, c):
+    def side(p, q):
+        return (x - q[0]) * (p[1] - q[1]) - (p[0] - q[0]) * (y - q[1])
+    d1, d2, d3 = side(a, b), side(b, c), side(c, a)
+    neg = d1 < 0 or d2 < 0 or d3 < 0
+    pos = d1 > 0 or d2 > 0 or d3 > 0
+    return not (neg and pos)
+
+
+def colour_at(x, y):
+    """Colour at a point in the icon's 64-unit space, or None if transparent."""
+    if not _in_round_rect(x, y, 4, 4, 60, 60, 12):
+        return None
+    if 28 <= x <= 36 and 11 <= y <= 30:
+        return ARROW
+    if _in_triangle(x, y, (17, 27), (47, 27), (32, 42)):
+        return ARROW
+    if _in_round_rect(x, y, 13, 37, 51, 53, 3, top=False) and not (19 < x < 45 and y < 46):
+        return TRAY
+    return TILE
 
 
 def glyph(size):
-    """RGBA pixels for one icon, drawn from proportions rather than a bitmap."""
-    px = [[(0, 0, 0, 0)] * size for _ in range(size)]
-    u = size / 16.0
-
-    def rect(x0, y0, x1, y1, c):
-        for y in range(max(0, int(y0)), min(size, int(y1))):
-            for x in range(max(0, int(x0)), min(size, int(x1))):
-                px[y][x] = c
-
-    t = max(1, round(u))                       # stroke thickness
-    # box
-    bx0, bx1, by0, by1 = 1.5 * u, 14.5 * u, 9.5 * u, 14.5 * u
-    rect(bx0, by0, bx1, by0 + t, FG)
-    rect(bx0, by1 - t, bx1, by1, FG)
-    rect(bx0, by0, bx0 + t, by1, FG)
-    rect(bx1 - t, by0, bx1, by1, FG)
-    # shaft
-    rect(8 * u - t / 2, 1.5 * u, 8 * u + t / 2 + (t % 2), 7.5 * u, FG)
-    # arrowhead
-    span = 3.2 * u
-    for i in range(int(span)):
-        y = 7.5 * u - span + i
-        # Widest at the top, converging to the tip at the bottom: a download
-        # arrow, not a Y.
-        half = (span - i) * 0.85
-        rect(8 * u - half - t / 2, y, 8 * u - half + t / 2 + (t % 2), y + 1, FG)
-        rect(8 * u + half - t / 2, y, 8 * u + half + t / 2 + (t % 2), y + 1, FG)
-    # seam
-    rect(bx0 + t, (by0 + by1) / 2, bx1 - t, (by0 + by1) / 2 + max(1, t // 2), MUTED)
+    """RGBA pixels for one icon: the vector shapes, supersampled for smooth edges."""
+    n = SUPERSAMPLE
+    scale = 64.0 / size
+    px = []
+    for py in range(size):
+        row = []
+        for qx in range(size):
+            r = g = b = a = 0
+            for sy in range(n):
+                for sx in range(n):
+                    c = colour_at((qx + (sx + 0.5) / n) * scale, (py + (sy + 0.5) / n) * scale)
+                    if c:
+                        r += c[0]; g += c[1]; b += c[2]; a += 1
+            if a:
+                row.append((r // a, g // a, b // a, round(255 * a / (n * n))))
+            else:
+                row.append((0, 0, 0, 0))
+        px.append(row)
     return px
 
 

@@ -2,10 +2,10 @@
 Type=Application
 Name=Usual Install
 GenericName=Application installer settings
-Comment=Choose how applications from websites are installed
+Comment=Installs apps from the download pages you already use
 Exec=usual-settings
 Icon=usual-install
 Terminal=false
 Categories=Settings;PackageManager;System;
-Keywords=install;package;flatpak;download;
+Keywords=install;installer;package;flatpak;aur;download;
 StartupNotify=true

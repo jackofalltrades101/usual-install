@@ -70,9 +70,33 @@ def call(op, **kw):
     return final, logs
 
 
+def _print_status(st):
+    import term
+    term.heading("Usual Install service")
+    term.row("Version", st.get("version"))
+    term.row("Distribution", st.get("distro"))
+    term.row("System packages", st.get("native_backend") or term.muted("none on this system"))
+    term.row("Install methods", ", ".join(st.get("backends", [])) or term.muted("none"))
+    cat = st.get("catalogue", {})
+    term.section("App catalogue")
+    term.row("Last updated", cat.get("generated") or "unknown")
+    term.row("Covers", f"{cat.get('hosts', 0)} websites")
+    term.row("Signature", term.good("valid") if cat.get("verified")
+             else term.bad("did not verify, so it is not in use"))
+    term.section("Browsers")
+    for name in st.get("browsers", []):
+        term.row(name, term.good("set up"))
+    for name in st.get("flatpak_browsers", []):
+        term.row(f"{name} (Flatpak)", term.warn("needs: usual-provision install --flatpak"))
+    for name in st.get("snap_browsers", []):
+        term.row(f"{name} (Snap)", term.bad("cannot be supported"))
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__); return 2
+    as_json = "--json" in sys.argv or not sys.stdout.isatty()
+    sys.argv = [a for a in sys.argv if a != "--json"]
     op = sys.argv[1]
     kw = {}
     if op == "resolve" and len(sys.argv) > 2:
@@ -93,11 +117,26 @@ def main():
                 sys.stdout.write(f"\r  {msg.get('pct')}%")
                 sys.stdout.flush()
             else:
-                print()
-                print(json.dumps(msg, indent=2))
+                if as_json:
+                    print()
+                    print(json.dumps(msg, indent=2))
+                elif op == "status" and msg.get("ok"):
+                    _print_status(msg.get("status", {}))
+                elif op == "resolve":
+                    import term
+                    for c in msg.get("candidates", []):
+                        term.row(c.get("name", ""), c.get("id", ""))
+                    term.result(bool(msg.get("ok")), msg.get("reason", ""))
+                else:
+                    import term
+                    print()
+                    term.result(bool(msg.get("ok")), msg.get("reason", ""))
                 return 0 if msg.get("ok") else 1
     except DaemonUnavailable as e:
-        print(f"usuald is not running: {e}", file=sys.stderr)
+        import term
+        term.result(False, f"The Usual Install service is not running ({e}). "
+                           f"Start it with: sudo systemctl enable --now usuald",
+                    stream=sys.stderr)
         return 3
     return 0
 
