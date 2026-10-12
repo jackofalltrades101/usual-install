@@ -1,7 +1,10 @@
 #!/bin/sh
 set -e
 if [ "$1" = configure ]; then
+  # Flatpak browsers, once, for every user (each done as that user).
+  usual-provision flatpak --all-users >/dev/null 2>&1 || true
   echo "Usual Install is running. Restart your browser and visit a download page."
+  echo "Installed a browser later? Run: usualctl refresh"
   echo "To turn it off: systemctl disable --now usuald.service"
 fi
 #DEBHELPER#

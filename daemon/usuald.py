@@ -171,15 +171,22 @@ class Daemon:
         self.install_lock = threading.Lock()
         self.history = []
         self.provisioned = {}
-        # Flatpak browsers, per user: {(home, app_id): {"name", "ready"}}.
-        self.flatpak = {}
-        self.flatpak_retry = {}
         self.stop_event = threading.Event()
 
     # -- operations ---------------------------------------------------------
 
     def op_status(self, req, peer, send):
         import provision as prov
+        # Flatpak browsers are per user: report the caller's own.
+        fp_state = []
+        try:
+            import pwd
+            if peer.get("uid", -1) >= 0:
+                home = pwd.getpwuid(peer["uid"]).pw_dir
+                fp_state = prov.flatpak_state(home, prov.current_extension_id() or "",
+                                              with_crx=prov.find_crx() is not None)
+        except (KeyError, OSError):
+            pass
         send({"type": "done", "ok": True, "status": {
             "version": VERSION,
             "enabled": self.config.get("enabled", True),
@@ -194,9 +201,8 @@ class Daemon:
                                if backends.native_backend() else None),
             "distro": backends.distro_family(),
             "browsers": [b["name"] for b in prov.detected()],
-            "flatpak_browsers": sorted({v["name"] for v in self.flatpak.values()}),
-            "flatpak_ready": sorted({v["name"] for v in self.flatpak.values()
-                                     if v["ready"]}),
+            "flatpak_browsers": [s["name"] for s in fp_state],
+            "flatpak_ready": [s["name"] for s in fp_state if s["ready"]],
             "snap_browsers": prov.snap_browsers(),
             "history": self.history[-20:],
         }})
@@ -538,76 +544,7 @@ class Daemon:
                 # Vivaldi) and is what makes the mechanism work.
                 self.clear_stale_system_manifests(b, ext_id)
                 wrote += self.preinstall_per_user(b, ext_id, entry, force)
-
-        wrote += self.provision_flatpak_users(ext_id, crx)
         return wrote
-
-    def user_homes(self):
-        """(home, uid, gid, username) for each real user with a home in /home."""
-        import pwd
-        seen, out = set(), []
-        for home in pathlib.Path("/home").glob("*"):
-            if not home.is_dir():
-                continue
-            real = home.resolve()
-            if real in seen:
-                continue
-            seen.add(real)
-            try:
-                st = real.stat()
-                name = pwd.getpwuid(st.st_uid).pw_name
-            except (OSError, KeyError):
-                continue
-            if st.st_uid == 0:
-                continue
-            out.append((real, st.st_uid, st.st_gid, name))
-        return out
-
-    def provision_flatpak_users(self, ext_id, crx):
-        """Set up every user's Flatpak browsers, so nobody has to run a command.
-
-        A sandboxed browser needs a per-user permission override, a wrapper it
-        can execute, and manifests inside its sandbox. All of that belongs to
-        the user, so it is done *as* the user with runuser, never as root, and
-        only where something is missing. A failure is retried after a while
-        rather than on every poll.
-        """
-        import provision as prov
-        from shutil import which
-        if os.geteuid() != 0 or not which("runuser") or not which("flatpak"):
-            return 0
-        done = 0
-        now = time.time()
-        for home, uid, gid, user in self.user_homes():
-            state = prov.flatpak_state(home, ext_id, with_crx=crx is not None)
-            for s in state:
-                self.flatpak[(str(home), s["app_id"])] = s
-            if not state or all(s["ready"] for s in state):
-                continue
-            if now < self.flatpak_retry.get(str(home), 0):
-                continue
-            cmd = ["runuser", "-u", user, "--", "env", "-i", f"HOME={home}",
-                   f"USER={user}", "PATH=/usr/local/bin:/usr/bin:/bin",
-                   sys.executable, "-B", str(HERE.parent / "provision" / "provision.py"),
-                   "flatpak", "--extension-id", ext_id]
-            if crx:
-                cmd += ["--crx", str(crx)]
-            try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-                ok = r.returncode == 0
-                detail = (r.stdout + r.stderr).strip().replace("\n", "; ")
-            except (OSError, subprocess.SubprocessError) as e:
-                ok, detail = False, str(e)
-            names = ", ".join(s["name"] for s in state if not s["ready"])
-            if ok:
-                log(f"set up Flatpak browser(s) for {user}: {names}")
-                done += 1
-                for s in prov.flatpak_state(home, ext_id, with_crx=crx is not None):
-                    self.flatpak[(str(home), s["app_id"])] = s
-            else:
-                log(f"could not set up Flatpak browser(s) for {user} ({names}): {detail}")
-                self.flatpak_retry[str(home)] = now + 600
-        return done
 
     def clear_stale_system_manifests(self, browser, ext_id):
         """Remove a system-wide manifest an older version of us may have left.

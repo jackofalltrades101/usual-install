@@ -312,8 +312,8 @@ def cmd_install(args):
             print(f"  flatpak      {'->' if ok_ else '!!'} {name}: {detail}")
             wrote += 1 if ok_ else 0
     elif flatpak_browsers():
-        print(f"  flatpak      .. {len(flatpak_browsers())} flatpak browser(s) left to "
-              f"usuald, which sets them up automatically")
+        print(f"  flatpak      .. {len(flatpak_browsers())} flatpak browser(s) skipped; "
+              f"set them up with: usualctl refresh")
     for n in snap_browsers():
         print(f"  snap         !! {n} cannot be supported; install a non-snap build")
 
@@ -324,17 +324,84 @@ def cmd_install(args):
     return 0
 
 
+def find_crx():
+    """The packed sensor, wherever this installation keeps it."""
+    for p in (pathlib.Path("/var/lib/usual-install/sensor.crx"),
+              pathlib.Path("/usr/share/usual-install/sensor.crx"),
+              ROOT / "sensor.crx"):
+        if p.is_file():
+            return p
+    return None
+
+
+def user_homes():
+    """(home, username) for each non-root user with a home directory in /home."""
+    import pwd
+    seen, out = set(), []
+    for home in sorted(pathlib.Path("/home").glob("*")):
+        if not home.is_dir():
+            continue
+        real = home.resolve()
+        if real in seen:
+            continue
+        seen.add(real)
+        try:
+            st = real.stat()
+            name = pwd.getpwuid(st.st_uid).pw_name
+        except (OSError, KeyError):
+            continue
+        if st.st_uid != 0:
+            out.append((real, name))
+    return out
+
+
+def setup_flatpak_all_users(ext_id, crx):
+    """As root: set up every user's Flatpak browsers, each *as that user*.
+
+    Used once when the package is installed. The work itself needs no
+    privilege and writes only into the user's home, so it runs via runuser
+    with a clean environment rather than as root.
+    """
+    results = []
+    for home, user in user_homes():
+        if not flatpak_browsers(home):
+            continue
+        cmd = ["runuser", "-u", user, "--", "env", "-i", f"HOME={home}", f"USER={user}",
+               "PATH=/usr/local/bin:/usr/bin:/bin", sys.executable, "-B", str(__file__),
+               "flatpak", "--extension-id", ext_id]
+        if crx:
+            cmd += ["--crx", str(crx)]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            results.append((user, r.returncode == 0, (r.stdout + r.stderr).strip()))
+        except (OSError, subprocess.SubprocessError) as e:
+            results.append((user, False, str(e)))
+    return results
+
+
 def cmd_flatpak(args):
-    """Set up this user's Flatpak browsers only. usuald runs this as each user."""
+    """Set up Flatpak browsers: this user's, or with --all-users (root) everyone's."""
+    sys.path.insert(0, str(ROOT / "daemon"))
+    import term
     ext_id = args.extension_id or current_extension_id()
     if not ext_id:
-        print("no extension id", file=sys.stderr)
+        term.result(False, "No extension id; this installation is incomplete.")
         return 1
-    ok = True
-    for name, ok_, detail in provision_flatpak(ext_id, args.crx):
-        print(f"  flatpak      {'->' if ok_ else '!!'} {name}: {detail}")
-        ok = ok and ok_
-    return 0 if ok else 1
+    crx = args.crx or find_crx()
+    if args.all_users:
+        if os.geteuid() != 0:
+            term.result(False, "--all-users needs root (sudo).")
+            return 1
+        results = setup_flatpak_all_users(ext_id, crx)
+        for user, ok_, detail in results:
+            term.result(ok_, f"{user}: " + ("Flatpak browsers set up" if ok_ else detail))
+        return 0 if all(ok_ for _, ok_, _ in results) else 1
+    results = provision_flatpak(ext_id, crx)
+    if not results:
+        term.result(True, "No Flatpak browsers to set up.")
+    for name, ok_, detail in results:
+        term.result(ok_, f"{name} (Flatpak): " + ("set up" if ok_ else detail))
+    return 0 if all(ok_ for _, ok_, _ in results) else 1
 
 
 def cmd_uninstall(args):
@@ -402,7 +469,7 @@ def cmd_status(args):
             live = (b["base"] / "config" / b["config"] /
                     "NativeMessagingHosts" / f"{HOST_NAME}.json").exists()
             term.row(b["name"], term.good("set up") if live
-                     else term.warn("not set up yet; the service does this within a minute"))
+                     else term.warn("not set up; run: usualctl refresh"))
     snaps = snap_browsers()
     if snaps:
         term.section(f"Snap browsers ({len(snaps)})")
@@ -430,8 +497,10 @@ def main():
     i.add_argument("--extension-id")
     i.set_defaults(func=cmd_install)
 
-    f = sub.add_parser("flatpak", help="set up this user's Flatpak browsers only "
-                                       "(usuald does this automatically)")
+    f = sub.add_parser("flatpak", help="set up this user's Flatpak browsers "
+                                       "(done once at install; rerun after adding one)")
+    f.add_argument("--all-users", action="store_true",
+                   help="as root: every user's, each done as that user")
     f.add_argument("--crx", help="packed sensor.crx to preinstall inside the sandbox")
     f.add_argument("--extension-id")
     f.set_defaults(func=cmd_flatpak)

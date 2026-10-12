@@ -11,6 +11,7 @@ product to function.
     ./client.py resolve https://zoom.us/download
     ./client.py install us.zoom.Zoom
     ./client.py install us.zoom.Zoom native zoom.us
+    ./client.py refresh        # set up browsers again, Flatpak ones included
 """
 import json, os, pathlib, socket, sys
 
@@ -70,6 +71,36 @@ def call(op, **kw):
     return final, logs
 
 
+def refresh_browsers():
+    """Set up every browser again. Returns [(ok, message)].
+
+    Two halves: ordinary browsers are provisioned by usuald (system-wide, so
+    it needs the service); this user's Flatpak browsers are set up right here,
+    as the user, since that needs no privilege. Shared by `usualctl refresh`
+    and the settings window's Refresh browsers button.
+    """
+    out = []
+    try:
+        done, _ = call("provision")
+        out.append((bool(done.get("ok")), "Browsers: " + (done.get("reason") or "checked")))
+    except DaemonUnavailable:
+        out.append((False, "Browsers: the Usual Install service is not running "
+                           "(start it with: sudo systemctl enable --now usuald)"))
+    root = pathlib.Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(root / "provision"))
+    import provision as prov
+    ext_id = prov.current_extension_id()
+    if not ext_id:
+        out.append((False, "Flatpak browsers: this installation has no extension id"))
+        return out
+    results = prov.provision_flatpak(ext_id, prov.find_crx())
+    if not results:
+        out.append((True, "Flatpak browsers: none installed"))
+    for name, ok, detail in results:
+        out.append((ok, f"{name} (Flatpak): " + ("set up" if ok else detail)))
+    return out
+
+
 def _print_status(st):
     import term
     term.heading("Usual Install service")
@@ -89,7 +120,7 @@ def _print_status(st):
     ready = set(st.get("flatpak_ready", []))
     for name in st.get("flatpak_browsers", []):
         term.row(f"{name} (Flatpak)", term.good("set up") if name in ready
-                 else term.warn("being set up"))
+                 else term.warn("not set up; run: usualctl refresh"))
     for name in st.get("snap_browsers", []):
         term.row(f"{name} (Snap)", term.bad("cannot be supported"))
 
@@ -100,6 +131,16 @@ def main():
     as_json = "--json" in sys.argv or not sys.stdout.isatty()
     sys.argv = [a for a in sys.argv if a != "--json"]
     op = sys.argv[1]
+    if op == "refresh":
+        import term
+        results = refresh_browsers()
+        if as_json:
+            print(json.dumps([{"ok": ok, "message": m} for ok, m in results], indent=2))
+        else:
+            for ok, m in results:
+                term.result(ok, m)
+            print("Restart your browsers to pick up any changes.")
+        return 0 if all(ok for ok, _ in results) else 1
     kw = {}
     if op == "resolve" and len(sys.argv) > 2:
         kw["pageUrl"] = sys.argv[2]
