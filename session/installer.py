@@ -29,6 +29,7 @@ import setup as compat_setup  # noqa: E402
 import client as daemon_client  # noqa: E402
 sys.path.insert(0, str(_ROOT / "session"))
 import aurbuild  # noqa: E402
+import style  # noqa: E402
 
 FLATHUB_REPO = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 # Containers and CI have no usable flatpak. USUAL_DRY_RUN exercises the whole
@@ -54,68 +55,36 @@ class InstallerWindow(Gtk.ApplicationWindow):
         self.page_url = page_url
         self.domain = domain
         self.chosen = candidates[0]
+        super().__init__(application=app, title=f"{self.chosen['name']} Installer")
+        header_box, body, footer = style.shell(self)
 
-        title = f"{self.chosen['name']} Installer"
-        super().__init__(application=app, title=title)
-        self.set_default_size(460, 220)
-        self.set_resizable(False)
-
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
-        outer.set_margin_top(22); outer.set_margin_bottom(18)
-        outer.set_margin_start(22); outer.set_margin_end(22)
-        self.set_child(outer)
-
-        self.heading = Gtk.Label(xalign=0)
-        self.heading.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(self.chosen['name'])}</span>")
-        outer.append(self.heading)
-
-        self.subtitle = Gtk.Label(xalign=0, wrap=True)
-        self.subtitle.add_css_class("dim-label")
-        outer.append(self.subtitle)
-
-        # An AUR package is a community build script. Link to it so anyone who
-        # wants to read what will run can, before pressing Install.
-        self.script_link = Gtk.LinkButton(label="View the build script")
-        self.script_link.set_halign(Gtk.Align.START)
-        self.script_link.set_visible(False)
-        outer.append(self.script_link)
+        self.header = style.Header(header_box)
 
         # Picker when the site maps to more than one product, or one product
         # available from more than one source (Flathub and the AUR, say).
         self.combo = None
-        if len(candidates) > 1:
-            same_app = len({c.get("summary", "") for c in candidates}) == 1 or any(
-                c.get("backend") == "aur" for c in candidates)
-            pick = Gtk.Label(xalign=0, label=(
-                "Choose how to install it:" if same_app
-                else "This site offers more than one application:"))
-            outer.append(pick)
-            self.combo = Gtk.DropDown.new_from_strings(
-                [f"{c['name']}  ({source_label(c)})" for c in candidates])
-            self.combo.connect("notify::selected", self.on_pick)
-            outer.append(self.combo)
+        self.form = style.Form()
+        body.append(self.form.grid)
+
+        # Who made what you are about to install: the one thing this window
+        # must never leave unsaid.
+        self.message = style.Message()
+        body.append(self.message.box)
 
         self.progress = Gtk.ProgressBar(show_text=True)
         self.progress.set_visible(False)
-        outer.append(self.progress)
+        body.append(self.progress)
 
-        self.log_view = Gtk.TextView(editable=False, monospace=True, cursor_visible=False,
-                                     wrap_mode=Gtk.WrapMode.WORD_CHAR)
-        self.log_scroll = Gtk.ScrolledWindow(vexpand=True)
-        self.log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.log_scroll.set_min_content_height(140)
-        self.log_scroll.set_child(self.log_view)
-        self.log_scroll.set_visible(False)
-        outer.append(self.log_scroll)
+        self.details, self.log_scroll, self.log_view = style.log_view()
+        body.append(self.details)
 
-        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.END)
+        footer.append(style.spacer())
         self.cancel_btn = Gtk.Button(label="Cancel")
         self.cancel_btn.connect("clicked", lambda *_: self.close())
         self.install_btn = Gtk.Button(label="Install")
         self.install_btn.add_css_class("suggested-action")
         self.install_btn.connect("clicked", self.on_install)
-        buttons.append(self.cancel_btn); buttons.append(self.install_btn)
-        outer.append(buttons)
+        footer.append(self.cancel_btn); footer.append(self.install_btn)
         self.set_default_widget(self.install_btn)
         self.install_btn.grab_focus()
         # Closing mid-install has to stop the install. Without this the
@@ -123,50 +92,49 @@ class InstallerWindow(Gtk.ApplicationWindow):
         self.proc = None
         self.connect("close-request", self.on_close)
 
+        if len(candidates) > 1:
+            self.combo = Gtk.DropDown.new_from_strings(
+                [f"{c['name']} ({source_label(c)})" for c in candidates])
+            self.combo.connect("notify::selected", self.on_pick)
         self.refresh_subtitle()
 
     # ---- state -----------------------------------------------------------
 
     def refresh_subtitle(self):
         c = self.chosen
-        size = c.get("summary") or "No description provided."
         is_aur = c.get("backend") == "aur"
-        self.script_link.set_visible(is_aur)
+        self.header.set(c["name"], c.get("summary") or "")
+        self.set_title(f"{c['name']} Installer")
         self.install_btn.set_label("Build and install" if is_aur else "Install")
+
+        self.form.clear()
+        if self.combo:
+            same_app = len({x.get("name") for x in self.candidates}) == 1
+            self.form.add("Install from" if same_app else "Application", self.combo)
+        else:
+            self.form.add("Source", source_label(c))
         if is_aur:
-            self.script_link.set_uri(
+            self.form.add("Package", c.get("aur_name", ""), mono=True)
+            self.form.add("Maintainer", f"{c.get('maintainer')}, {c.get('votes')} votes")
+            self.message.show(
+                "warning",
+                "This is a community build script from the AUR. Like a Windows "
+                "installer, it runs code on your computer, and you will be asked "
+                "for your password before anything is installed.",
+                "Read the build script",
                 "https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h="
                 + c.get("pkgbase", ""))
-            self.subtitle.set_markup(
-                f"{GLib.markup_escape_text(size)}\n"
-                f"<tt>{GLib.markup_escape_text(c.get('aur_name', ''))}</tt> · AUR · "
-                f"built on this computer\n"
-                + GLib.markup_escape_text(
-                    f"⚠ Community build script, maintained by {c.get('maintainer')} "
-                    f"({c.get('votes')} votes). Like a Windows installer, it runs "
-                    f"code on your computer, and you will be asked for your "
-                    f"password before it is installed."))
-            self.heading.set_markup(
-                f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(c['name'])}</span>")
-            self.set_title(f"{c['name']} Installer")
-            return
-        # Say who actually published it. An unverified Flathub app is usually a
-        # community repackage, and "Flathub" alone reads as more official than
-        # that. Catalogues built before the flag existed show neither line.
-        origin = ""
-        if c.get("verified") is True:
-            origin = "\n✓ Published by the developer (verified on Flathub)"
-        elif c.get("verified") is False:
-            origin = ("\n⚠ Community package: not published or supported by "
-                      "the developer")
-        self.subtitle.set_markup(
-            f"{GLib.markup_escape_text(size)}\n"
-            f"<tt>{GLib.markup_escape_text(c['id'])}</tt> · "
-            f"{GLib.markup_escape_text(c.get('remote', 'flathub'))} · user install"
-            f"{GLib.markup_escape_text(origin)}")
-        self.heading.set_markup(
-            f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(c['name'])}</span>")
-        self.set_title(f"{c['name']} Installer")
+        else:
+            self.form.add("Package", c["id"], mono=True)
+            self.form.add("Installs for", "You only, no password needed")
+            if c.get("verified") is True:
+                self.message.show("positive", "Published by the developer and "
+                                              "verified on Flathub.")
+            elif c.get("verified") is False:
+                self.message.show("warning", "Community package: not published or "
+                                             "supported by the developer.")
+            else:
+                self.message.hide()
 
     def on_close(self, *_a):
         if self.proc and self.proc.poll() is None:
@@ -189,10 +157,10 @@ class InstallerWindow(Gtk.ApplicationWindow):
         self.install_btn.set_sensitive(False)
         if self.combo:
             self.combo.set_sensitive(False)
+        self.cancel_btn.set_label("Stop")
         self.progress.set_visible(True)
         self.progress.set_text("Preparing…")
-        self.log_scroll.set_visible(True)
-        self.set_default_size(460, 420)
+        self.details.set_visible(True)
         threading.Thread(target=self.run_install, daemon=True).start()
 
     def native_fallback(self, app_id):
@@ -298,19 +266,26 @@ class InstallerWindow(Gtk.ApplicationWindow):
         self.progress.set_text(f"Installing… {pct}%")
 
     def finish(self, ok, error):
+        name = self.chosen["name"]
+        self.progress.set_visible(False)
         if ok:
-            self.progress.set_fraction(1.0)
-            self.progress.set_text("Installed")
-            self.install_btn.set_label("Open")
+            self.message.show("positive", f"{name} is installed. You can open it "
+                                          f"now or find it in your applications menu.")
+            self.install_btn.set_label(f"Open {name}")
             self.install_btn.set_sensitive(True)
             self.install_btn.disconnect_by_func(self.on_install)
             self.install_btn.connect("clicked", self.on_open)
             self.cancel_btn.set_label("Close")
         else:
-            self.progress.set_fraction(0.0)
-            self.progress.set_text(f"Failed — {error}")
+            self.message.show("negative", f"{name} was not installed: {error}. "
+                                          f"The details below show what happened.")
             self.append_log(f"\n*** {error}\n")
+            self.details.set_expanded(True)
             self.cancel_btn.set_label("Close")
+            self.install_btn.set_label("Try again")
+            self.install_btn.set_sensitive(True)
+            if self.combo:
+                self.combo.set_sensitive(True)
 
     def on_open(self, _btn):
         if DRY_RUN:
@@ -327,72 +302,50 @@ class InstallerWindow(Gtk.ApplicationWindow):
         self.close()
 
 
-def _frame(window, title):
-    """Shared window chrome."""
-    window.set_default_size(480, 240)
-    window.set_resizable(False)
-    outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-    outer.set_margin_top(22); outer.set_margin_bottom(18)
-    outer.set_margin_start(22); outer.set_margin_end(22)
-    window.set_child(outer)
-    heading = Gtk.Label(xalign=0)
-    heading.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(title)}</span>")
-    outer.append(heading)
-    return outer
-
-
 class CompatWindow(Gtk.ApplicationWindow):
     """No Linux build, but the Windows version runs well here."""
 
     def __init__(self, app, entry, plan, exe_path, reason):
         self.entry, self.plan, self.exe_path = entry, plan, exe_path
         super().__init__(application=app, title=f"{entry['name']} Setup")
-        outer = _frame(self, entry["name"])
+        header_box, body, footer = style.shell(self)
+        header = style.Header(header_box, icon_name="application-x-executable")
+        header.set(entry["name"], "Windows application")
 
         # Say what this actually is. A user who thinks they installed a native
         # app and then hits Wine quirks will blame Usual Install.
-        sub = Gtk.Label(xalign=0, wrap=True)
-        sub.add_css_class("dim-label")
-        sub.set_markup(
-            f"No Linux version is available. This is the <b>Windows</b> "
-            f"application, which will run through "
-            f"<b>{GLib.markup_escape_text(plan['runner'].title())}</b>.\n"
-            f"Compatibility rating: <b>{GLib.markup_escape_text(plan.get('grade','?'))}</b> · "
-            f"{GLib.markup_escape_text(os.path.basename(exe_path))}")
-        outer.append(sub)
+        runner = plan["runner"].title()
+        self.message = style.Message()
+        self.message.show(
+            "info", f"There is no Linux version. This is the Windows application, "
+                    f"which will run through {runner}.")
+        body.append(self.message.box)
 
+        form = style.Form()
+        form.add("Runs with", runner)
+        form.add("Compatibility", f"{plan.get('grade', 'unknown').title()} rating")
+        form.add("Installer", os.path.basename(exe_path), mono=True)
         if plan.get("setup") == "install-flatpak":
-            note = Gtk.Label(xalign=0, wrap=True,
-                             label=f"{plan['package']} will be installed first "
-                                   f"(user scope, no password needed).")
-            note.add_css_class("dim-label")
-            outer.append(note)
+            form.add("Also installs", f"{plan['package']}, for you only, no password needed")
+        body.append(form.grid)
 
         for n in plan.get("notes", []):
-            w = Gtk.Label(xalign=0, wrap=True, label=f"⚠  {n}")
-            outer.append(w)
+            m = style.Message(); m.show("warning", n)
+            body.append(m.box)
 
         self.progress = Gtk.ProgressBar(show_text=True)
         self.progress.set_visible(False)
-        outer.append(self.progress)
+        body.append(self.progress)
+        self.details, self.log_scroll, self.log_view = style.log_view(150)
+        body.append(self.details)
 
-        self.log_view = Gtk.TextView(editable=False, monospace=True, cursor_visible=False,
-                                     wrap_mode=Gtk.WrapMode.WORD_CHAR)
-        self.log_scroll = Gtk.ScrolledWindow(vexpand=True)
-        self.log_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.log_scroll.set_min_content_height(150)
-        self.log_scroll.set_child(self.log_view)
-        self.log_scroll.set_visible(False)
-        outer.append(self.log_scroll)
-
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.END)
+        footer.append(style.spacer())
         self.cancel_btn = Gtk.Button(label="Cancel")
         self.cancel_btn.connect("clicked", lambda *_: self.close())
         self.go_btn = Gtk.Button(label="Set up and run")
         self.go_btn.add_css_class("suggested-action")
         self.go_btn.connect("clicked", self.on_go)
-        row.append(self.cancel_btn); row.append(self.go_btn)
-        outer.append(row)
+        footer.append(self.cancel_btn); footer.append(self.go_btn)
         self.set_default_widget(self.go_btn)
         self.go_btn.grab_focus()
         self.holder = {}
@@ -412,10 +365,10 @@ class CompatWindow(Gtk.ApplicationWindow):
 
     def on_go(self, _btn):
         self.go_btn.set_sensitive(False)
+        self.cancel_btn.set_label("Stop")
         self.progress.set_visible(True)
         self.progress.set_text("Setting up…")
-        self.log_scroll.set_visible(True)
-        self.set_default_size(480, 440)
+        self.details.set_visible(True)
         threading.Thread(target=self.work, daemon=True).start()
 
     def work(self):
@@ -435,16 +388,18 @@ class CompatWindow(Gtk.ApplicationWindow):
         GLib.idle_add(self.done, rc)
 
     def done(self, rc):
+        self.progress.set_visible(False)
+        name = self.entry["name"]
         if rc == 0:
-            self.progress.set_fraction(1.0)
-            self.progress.set_text("Ready")
+            self.message.show("positive", f"{name} is set up and running.")
             self.go_btn.set_label("Done")
             self.go_btn.set_sensitive(True)
             self.go_btn.disconnect_by_func(self.on_go)
             self.go_btn.connect("clicked", lambda *_: self.close())
         else:
-            self.progress.set_fraction(0.0)
-            self.progress.set_text(f"Setup failed (exit {rc})")
+            self.message.show("negative", f"Setting up {name} failed (exit code {rc}). "
+                                          f"The details below show what happened.")
+            self.details.set_expanded(True)
         self.cancel_btn.set_label("Close")
 
 
@@ -452,27 +407,28 @@ class UnsupportedWindow(Gtk.ApplicationWindow):
     """We know what this is, and it will not run acceptably. Say so."""
 
     def __init__(self, app, entry, reason):
-        super().__init__(application=app, title=f"{entry['name']} — not supported")
-        outer = _frame(self, f"{entry['name']} is not supported")
-        self.set_default_size(460, 190)
+        super().__init__(application=app, title=f"{entry['name']}: not supported")
+        header_box, body, footer = style.shell(self, width=470)
+        header = style.Header(header_box, icon_name="dialog-information")
+        header.set(entry["name"], "Windows application")
 
-        body = Gtk.Label(xalign=0, wrap=True)
-        body.set_markup(
-            f"There is no Linux version, and the Windows version does not run "
-            f"well enough through any compatibility layer on this system to be "
-            f"worth offering.\n\n<i>{GLib.markup_escape_text(reason)}</i>")
-        outer.append(body)
+        m = style.Message()
+        m.show("negative", f"{entry['name']} has no Linux version, and the Windows "
+                           f"version does not run well enough on this computer to "
+                           f"offer it.")
+        body.append(m.box)
+        why = Gtk.Label(xalign=0, wrap=True, max_width_chars=56, label=reason)
+        why.add_css_class("summary")
+        body.append(why)
+        hint = Gtk.Label(xalign=0, wrap=True,
+                         label="Your download has been left as it is.")
+        body.append(hint)
 
-        hint = Gtk.Label(xalign=0, wrap=True)
-        hint.add_css_class("dim-label")
-        hint.set_label("The original download has not been cancelled.")
-        outer.append(hint)
-
-        row = Gtk.Box(halign=Gtk.Align.END)
+        footer.append(style.spacer())
         close = Gtk.Button(label="Close")
         close.connect("clicked", lambda *_: self.close())
-        row.append(close)
-        outer.append(row)
+        footer.append(close)
+        self.set_default_widget(close)
 
 
 class InstallerApp(Gtk.Application):

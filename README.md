@@ -72,6 +72,8 @@ stricter treatment than anything else:
 When the developer publishes on Flathub, that is still offered first; the AUR
 comes next, ahead of community-packaged Flathub apps.
 
+![Installing Minecraft from the AUR](docs/img/installer-aur.png)
+
 ![Compatibility window](docs/img/compat.png)
 
 ## Installing

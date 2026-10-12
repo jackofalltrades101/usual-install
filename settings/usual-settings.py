@@ -17,41 +17,55 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "daemon"))
 sys.path.insert(0, str(ROOT / "provision"))
 import client as daemon_client  # noqa: E402
+sys.path.insert(0, str(ROOT / "session"))
+import style  # noqa: E402
 
 
-def row(label, value, dim=False):
-    b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    k = Gtk.Label(xalign=0, label=label)
-    k.set_size_request(190, -1)
-    k.add_css_class("dim-label")
-    v = Gtk.Label(xalign=0, label=str(value), wrap=True, selectable=True)
-    if dim:
-        v.add_css_class("dim-label")
-    b.append(k); b.append(v)
-    return b
+def readable_time(stamp):
+    """'2026-10-12T07:23:00Z' -> '12 Oct 2026, 07:23 UTC'."""
+    import time
+    try:
+        return time.strftime("%-d %b %Y, %H:%M UTC", time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return stamp
 
 
-def section(title):
-    lbl = Gtk.Label(xalign=0)
-    lbl.set_markup(f"<b>{GLib.markup_escape_text(title)}</b>")
-    lbl.set_margin_top(10)
-    return lbl
+def group(box, title):
+    """A titled Plasma-style group. Returns its Form."""
+    lbl = Gtk.Label(xalign=0, label=title)
+    lbl.add_css_class("group-title")
+    box.append(lbl)
+    frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    frame.add_css_class("group")
+    form = style.Form()
+    frame.append(form.grid)
+    box.append(frame)
+    form.frame = frame
+    return form
 
 
 class SettingsWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Usual Install")
+        style.apply()
+        self.add_css_class("usual")
         self.set_default_size(620, 680)
         self.status = None
         self.config = {}
 
-        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        self.box.set_margin_top(18); self.box.set_margin_bottom(18)
-        self.box.set_margin_start(20); self.box.set_margin_end(20)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        head.add_css_class("header")
+        style.Header(head, icon_name="usual-install").set(
+            "Usual Install", "Installs apps from the download pages you already use")
+        root.append(head)
+        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.box.add_css_class("body")
         scroll = Gtk.ScrolledWindow(vexpand=True)
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.set_child(self.box)
-        self.set_child(scroll)
+        root.append(scroll)
+        self.set_child(root)
 
         self.refresh()
 
@@ -86,77 +100,71 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self.render_no_daemon(error)
             return
 
-        self.box.append(section("Service"))
-        self.box.append(row("Version", status.get("version")))
-        self.box.append(row("Distribution", status.get("distro")))
-        self.box.append(row("Native backend",
-                            status.get("native_backend") or "none on this system"))
-        self.box.append(row("Backends available", ", ".join(status.get("backends", [])) or "none"))
-
+        f = group(self.box, "Service")
         sw = Gtk.Switch(active=bool(config.get("enabled", True)), halign=Gtk.Align.START)
         sw.connect("state-set", self.on_enabled)
-        r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        k = Gtk.Label(xalign=0, label="Enabled"); k.set_size_request(190, -1)
-        k.add_css_class("dim-label")
-        r.append(k); r.append(sw)
-        self.box.append(r)
+        f.add("Turned on", sw)
+        f.add("Version", status.get("version"))
+        f.add("Distribution", status.get("distro"))
+        f.add("System packages", status.get("native_backend") or "none on this system")
+        f.add("Install methods", ", ".join(status.get("backends", [])) or "none")
 
         cat = status.get("catalogue", {})
-        self.box.append(section("Catalogue"))
-        self.box.append(row("Generated", cat.get("generated") or "unknown"))
-        self.box.append(row("Entries", f"{cat.get('hosts', 0)} hostnames"))
-        verified = cat.get("verified")
-        self.box.append(row("Signature",
-                            "verified" if verified else "NOT VERIFIED — not in use"))
-        self.box.append(row("Path", cat.get("path") or "none", dim=True))
+        f = group(self.box, "App catalogue")
+        f.add("Last updated", readable_time(cat.get("generated")) or "unknown")
+        f.add("Covers", f"{cat.get('hosts', 0)} websites")
+        f.add("Location", cat.get("path") or "none", mono=True)
+        m = style.Message()
+        if cat.get("verified"):
+            m.show("positive", "The catalogue's signature is valid.")
+        else:
+            m.show("negative", "The catalogue's signature did not verify, so it is "
+                               "not being used and nothing will be installed.")
+        f.frame.append(m.box)
 
-        self.box.append(section("Browsers"))
+        f = group(self.box, "Browsers")
         for name in status.get("browsers", []):
-            self.box.append(row(name, "provisioned"))
+            f.add(name, "Set up")
         for name in status.get("flatpak_browsers", []):
-            self.box.append(row(f"{name} (flatpak)", "sandboxed — run: provision --flatpak"))
+            f.add(f"{name} (Flatpak)", "Needs one step: usual-provision install --flatpak")
         for name in status.get("snap_browsers", []):
-            self.box.append(row(f"{name} (snap)",
-                                "not supportable; install a non-snap build"))
+            f.add(f"{name} (Snap)", "Cannot be supported; install a non-Snap version")
         if not any((status.get("browsers"), status.get("flatpak_browsers"),
                     status.get("snap_browsers"))):
-            self.box.append(row("", "no Chromium-family browser found", dim=True))
-
-        btn = Gtk.Button(label="Re-provision browsers now", halign=Gtk.Align.START)
+            f.add("", "No Chromium-based browser found")
+        btn = Gtk.Button(label="Set up browsers again", halign=Gtk.Align.START)
         btn.connect("clicked", self.on_provision)
-        self.box.append(btn)
+        f.frame.append(btn)
 
-        self.box.append(section("Recent installs"))
+        f = group(self.box, "Recent installs")
         hist = status.get("history", [])
         if not hist:
-            self.box.append(row("", "nothing yet", dim=True))
+            f.add("", "Nothing installed yet")
         for h in reversed(hist[-10:]):
-            self.box.append(row(h.get("at", ""),
-                                f"{h.get('id')} via {h.get('backend')} "
-                                f"{'ok' if h.get('rc') == 0 else 'failed'}"))
+            f.add(readable_time(h.get("at")) or "",
+                  f"{h.get('id')} from {h.get('backend')}: "
+                  f"{'installed' if h.get('rc') == 0 else 'failed'}")
 
-        self.box.append(section("Ignored domains"))
+        f = group(self.box, "Sites to leave alone")
         ign = config.get("ignored_domains", [])
-        self.entry = Gtk.Entry(placeholder_text="example.com, one per line or comma separated",
-                               text=", ".join(ign))
+        self.entry = Gtk.Entry(placeholder_text="example.com, another.org",
+                               text=", ".join(ign), hexpand=True)
         self.entry.connect("activate", self.on_ignored)
-        self.box.append(self.entry)
-        hint = Gtk.Label(xalign=0, wrap=True,
-                         label="Downloads from these domains are left alone. Press Enter to save.")
-        hint.add_css_class("dim-label")
-        self.box.append(hint)
+        f.add("Websites", self.entry)
+        f.add("", "Downloads from these sites are never intercepted. Press Enter to save.")
 
     def render_no_daemon(self, error):
-        self.box.append(section("usuald is not running"))
-        msg = Gtk.Label(xalign=0, wrap=True, label=(
-            "Usual Install still works without the service — the browser "
-            "extension and user-scope Flathub installs do not need it — but "
-            "native package installs, system-wide provisioning and these "
-            "settings do.\n\nStart it with:  sudo systemctl start usuald"))
-        self.box.append(msg)
+        m = style.Message()
+        m.show("warning", "The Usual Install service is not running. Downloads still "
+                          "install from Flathub without it, but installs from your "
+                          "distribution's repositories and these settings need it. "
+                          "Start it with: sudo systemctl enable --now usuald")
+        self.box.append(m.box)
         if error:
-            self.box.append(row("Detail", error, dim=True))
-        btn = Gtk.Button(label="Try again", halign=Gtk.Align.START)
+            d = Gtk.Label(xalign=0, wrap=True, label=error, selectable=True)
+            d.add_css_class("summary")
+            self.box.append(d)
+        btn = Gtk.Button(label="Check again", halign=Gtk.Align.START)
         btn.connect("clicked", lambda *_: self.refresh())
         self.box.append(btn)
 
