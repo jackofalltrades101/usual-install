@@ -3,7 +3,8 @@
 #   push a tag vX.Y.Z    -> full release: .pkg.tar.zst, .deb, .rpm, AUR files
 #   weekly / manual run  -> refresh the signed catalogue only
 #
-# Two repository secrets are required (Settings > Secrets and variables > Actions):
+# Two repository secrets are required. `bash scripts/setup-release-keys.sh` sets
+# them (Settings > Secrets and variables > Actions shows them afterwards):
 #
 #   SENSOR_PEM             contents of keys/sensor.pem   (fixes the extension id)
 #   CATALOGUE_SIGNING_KEY  contents of keys/catalogue-signing.key
