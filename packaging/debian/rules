@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_build:
+	# The catalogue is generated from Flathub metadata and needs network
+	# access, so it is built outside the package build where possible.
+	[ -f catalogue/catalogue.json ] || python3 catalogue/build_catalogue.py -o catalogue/catalogue.json
+	[ -f compat/compat.json ] || python3 compat/build_compat.py -o compat/compat.json
+
+override_dh_auto_test:
+	# Only the self-contained checks. The full suite starts browsers and a
+	# daemon, which is not something a package build should be doing.
+	python3 resolver/resolve.py
+	python3 compat/match.py --self-test
+	python3 compat/runners.py --self-test
+
+override_dh_auto_install:
+	make install DESTDIR=debian/usual-install PREFIX=/usr
+
+override_dh_installsystemd:
+	dh_installsystemd --no-start --no-enable

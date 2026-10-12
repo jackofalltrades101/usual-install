@@ -1,0 +1,22 @@
+Source: usual-install
+Section: utils
+Priority: optional
+Maintainer: Usual Install <usual-install@example.invalid>
+Build-Depends: debhelper-compat (= 13), python3, make
+Standards-Version: 4.6.2
+Homepage: https://example.invalid/usual-install
+
+Package: usual-install
+Architecture: all
+Depends: ${misc:Depends}, python3, python3-gi, gir1.2-gtk-4.0, flatpak, policykit-1 | polkitd
+Recommends: chromium | chromium-browser | brave-browser | vivaldi-stable
+Description: install applications from vendor download pages
+ Usual Install makes a vendor's own "Download for Linux" button end in a
+ working, installed application, the way an .exe installer does on Windows,
+ instead of a tarball or an AppImage with no desktop entry.
+ .
+ A system service provisions every Chromium-family browser on the machine,
+ including ones installed later, so there is no browser extension for the
+ user to find or install. When a download page is recognised, the matching
+ package is installed from Flathub or from the distribution's own
+ repositories.

@@ -1,0 +1,15 @@
+# Generated from Flathub AppStream -- rebuild with catalogue/build_catalogue.py
+catalogue/catalogue.json
+compat/compat.json
+# Signing key for the extension id. Losing it changes the id for every user.
+keys/sensor.pem
+# Catalogue signing key. The public half (catalogue/signing.pub) DOES ship.
+keys/catalogue-signing.key
+*.json.sig
+sensor.crx
+__pycache__/
+*.pyc
+test/screenshots/
+# Core dumps from emulated test runs
+*.core
+core

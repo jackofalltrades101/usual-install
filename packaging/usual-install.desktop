@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Usual Install
+GenericName=Application installer settings
+Comment=Choose how applications from websites are installed
+Exec=usual-settings
+Icon=usual-install
+Terminal=false
+Categories=Settings;PackageManager;System;
+Keywords=install;package;flatpak;download;
+StartupNotify=true

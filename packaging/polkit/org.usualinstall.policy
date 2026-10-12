@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Usual Install</vendor>
+  <vendor_url>https://example.invalid/usual-install</vendor_url>
+
+  <!--
+    One narrow action. The caller may ask to install a package that the signed
+    catalogue lists and whose own distro metadata names the vendor's domain;
+    it cannot ask for an arbitrary package. auth_admin_keep means a desktop
+    user authenticates once and is not prompted again for the rest of the
+    session, which is what keeps the flow feeling like an installer rather
+    than a sudo prompt.
+  -->
+  <action id="org.usualinstall.install">
+    <description>Install an application from your distribution's repositories</description>
+    <message>Authentication is required to install an application</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.usualinstall.configure">
+    <description>Change Usual Install settings</description>
+    <message>Authentication is required to change Usual Install settings</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

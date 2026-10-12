@@ -1,0 +1,29 @@
+[Unit]
+Description=Usual Install service
+Documentation=file:///usr/share/doc/usual-install/README.md
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/usuald
+Restart=on-failure
+RestartSec=5
+
+# The daemon installs packages, so it cannot be locked down to nothing, but
+# everything it does not need is removed.
+NoNewPrivileges=no
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RuntimeDirectory=usual-install
+RuntimeDirectoryMode=0755
+StateDirectory=usual-install
+ConfigurationDirectory=usual-install
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,49 @@
+# Multi-browser image: does each Chromium fork actually honour a preinstall
+# manifest and install the sensor itself?
+#
+# Chrome, Edge and Opera publish no arm64 Linux build, so on Apple Silicon this
+# covers Chromium, Brave and Vivaldi. Their repositories are added only on
+# amd64, where the same image covers all six with no changes.
+#
+#   docker build -t usual-install-browsers -f test/Dockerfile.browsers .
+#   docker run --rm usual-install-browsers
+#
+# On an x86_64 Linux host that is the complete matrix. Running it under QEMU
+# emulation does not work -- Chromium aborts in rcu -- so use real hardware.
+FROM debian:stable-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg \
+    && install -d -m 0755 /usr/share/keyrings \
+    && curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg \
+         https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg arch=amd64,arm64] https://brave-browser-apt-release.s3.brave.com/ stable main" \
+         > /etc/apt/sources.list.d/brave-browser-release.list \
+    && curl -fsSL https://repo.vivaldi.com/archive/linux_signing_key.pub \
+         | gpg --dearmor -o /usr/share/keyrings/vivaldi-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/vivaldi-archive-keyring.gpg arch=amd64,arm64] https://repo.vivaldi.com/archive/deb/ stable main" \
+         > /etc/apt/sources.list.d/vivaldi.list \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+         curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+           | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
+         && echo "deb [signed-by=/usr/share/keyrings/google-chrome.gpg arch=amd64] https://dl.google.com/linux/chrome/deb/ stable main" \
+           > /etc/apt/sources.list.d/google-chrome.list \
+         && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+           | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg \
+         && echo "deb [signed-by=/usr/share/keyrings/microsoft.gpg arch=amd64] https://packages.microsoft.com/repos/edge stable main" \
+           > /etc/apt/sources.list.d/microsoft-edge.list \
+         && echo "EXTRA_BROWSERS=google-chrome-stable microsoft-edge-stable" > /etc/extra-browsers ; \
+       else echo "EXTRA_BROWSERS=" > /etc/extra-browsers ; fi \
+    && apt-get update \
+    && . /etc/extra-browsers \
+    && apt-get install -y --no-install-recommends \
+         chromium brave-browser vivaldi-stable $EXTRA_BROWSERS \
+         python3 xvfb xauth x11-utils xdotool openssl procps \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -s /bin/bash tester
+WORKDIR /src
+COPY . /src
+RUN chown -R tester:tester /src
+USER tester
+ENTRYPOINT ["/bin/bash", "test/preinstall_test.sh"]

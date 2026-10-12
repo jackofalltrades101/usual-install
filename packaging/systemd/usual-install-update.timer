@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the Usual Install catalogue daily
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=24h
+# Spread the load so every installation does not fetch at the same minute.
+RandomizedDelaySec=2h
+Persistent=yes
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Usual Install",
+  "version": "0.1.0",
+  "description": "Installs Linux applications from vendor download pages using your package manager.",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsEWmQ0A4QnkWbPtz0HNcuUwpFOLwHfI94Qagsbor9oQzGuhOMywFhDYOaolm1PUThABjK3nCBehRvm2XarmI33asomMyeuMg2zPFKSVoQaKrTFAYm317T/92fCpyuMOBiTctRmaI6yMiDcADNpDN0AuhHIhw3DBzNjdXJ0Gcs/LlWT0XWi/Jr9CxWdqtYX1uDZugTU8Jyeje6/JSy4HjQrCbgCxv7gVKYzw4Qlia0DkOmXK3VTjRDmpAN9/m7n+PBwBHSHJyziMA65W9uinevKXK54pH95xmzojvBZ5+s7sCC4ZmfvVmGMG3YYOcIzAh78H5dZ7lRyoX/ZazXSdrwwIDAQAB"
+}

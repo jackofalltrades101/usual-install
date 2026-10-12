@@ -1,0 +1,66 @@
+# Tier 3 environment: a real Linux VM with a display, where the GTK windows can
+# actually be rendered and a real flatpak install can run.
+#
+#   limactl start --name=usual test/lima-usual.yaml
+#   limactl shell usual
+#   limactl stop usual ; limactl delete usual
+#
+# Debian rather than Arch because Arch publishes no arm64 images and this host
+# is Apple Silicon -- an x86 guest would mean emulation, where Chromium aborts.
+# Debian also ships chromium as a real .deb, unlike Ubuntu's snap, which keeps
+# the sandboxed-browser problem out of the way for now.
+#
+# vz = Apple Virtualization, so the guest runs at native speed.
+base: template://debian-13
+vmType: vz
+cpus: 2
+memory: 4GiB
+disk: 20GiB
+
+mounts:
+  - location: "~/Desktop/Linux projects/usual-install"
+    mountPoint: /usual-install
+    writable: true
+
+# x11vnc, so the rendered desktop can be looked at from the host:
+#   open vnc://localhost:5900     (password: usual)
+# macOS Screen Sharing refuses VNC servers with no authentication, so the
+# server is always started with a password even though it is loopback-only.
+portForwards:
+  - guestPort: 5900
+    hostPort: 5900
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      # A deliberately small display stack: a virtual X server, a tiny window
+      # manager so GTK windows get decorations, VNC to look at it, and
+      # imagemagick to capture it. No desktop environment.
+      apt-get install -y --no-install-recommends \
+        flatpak \
+        libgtk-4-1 gir1.2-gtk-4.0 python3-gi python3 \
+        xvfb x11vnc openbox xauth dbus-x11 imagemagick \
+        xdotool x11-utils \
+        chromium openssl ca-certificates procps
+      apt-get clean
+
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux
+      # User-scope Flathub: the same rootless mechanism Usual Install uses.
+      flatpak --user remote-add --if-not-exists flathub \
+        https://dl.flathub.org/repo/flathub.flatpakrepo
+      mkdir -p ~/.cache/usual-install
+
+message: |
+  Tier 3 VM ready.
+
+    limactl shell usual
+    bash /usual-install/test/tier3.sh       # render the windows, real install
+
+  To watch it:  open vnc://localhost:5900   (password: usual)

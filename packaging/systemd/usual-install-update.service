@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh the Usual Install catalogue
+Documentation=file:///usr/share/doc/usual-install/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The URL comes from /etc/usual-install/config.json; an unset or unreachable
+# one simply leaves the installed catalogue in place.
+ExecStart=/usr/bin/usual-install-update
+StateDirectory=usual-install
+PrivateTmp=yes
+ProtectHome=yes
+NoNewPrivileges=yes

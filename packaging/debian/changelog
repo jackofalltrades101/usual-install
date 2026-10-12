@@ -1,0 +1,5 @@
+usual-install (0.2.0-1) unstable; urgency=medium
+
+  * Phase 2: system service, native package backends, settings application.
+
+ -- Usual Install <usual-install@example.invalid>  Sun, 12 Oct 2026 00:00:00 +0000

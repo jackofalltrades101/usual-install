@@ -1,0 +1,28 @@
+# Maintainer: Usual Install
+pkgname=usual-install
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Install applications from vendor download pages using your package manager"
+arch=('any')
+url="https://example.invalid/usual-install"
+license=('MIT')
+depends=('python' 'python-gobject' 'gtk4' 'flatpak' 'polkit')
+optdepends=(
+  'chromium: browser support'
+  'brave-browser: browser support'
+  'vivaldi: browser support'
+)
+makedepends=('chromium')
+backup=('etc/usual-install/config.json')
+install=usual-install.install
+source=()
+
+build() {
+  cd "$startdir"
+  make catalogue crx
+}
+
+package() {
+  cd "$startdir"
+  make install DESTDIR="$pkgdir" PREFIX=/usr
+}

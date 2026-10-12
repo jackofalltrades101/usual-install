@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "backend_order": ["flatpak-user", "native"],
+  "provision_interval_seconds": 30,
+  "catalogue_url": "",
+  "update_interval_hours": 24,
+  "disabled_browsers": [],
+  "ignored_domains": [],
+  "allow_unsigned_catalogue": false
+}

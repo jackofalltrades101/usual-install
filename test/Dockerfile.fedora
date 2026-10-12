@@ -1,0 +1,25 @@
+# Fedora test environment -- the third distro family.
+#
+# Phase 1 installs through `flatpak --user`, which is distro-independent by
+# construction, but "works on Fedora" is a claim worth testing rather than
+# assuming. Fedora publishes arm64 images, so this runs natively.
+#
+#   docker build -t usual-install-fedora -f test/Dockerfile.fedora .
+#   docker run --rm --user root usual-install-fedora
+FROM fedora:latest
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+      python3 python3-gobject gtk4 flatpak \
+      chromium xorg-x11-server-Xvfb xorg-x11-xauth xdotool ImageMagick \
+      openssl procps-ng findutils make \
+      mesa-libGLES mesa-dri-drivers dbus-daemon \
+    && dnf clean all
+
+RUN useradd -m -s /bin/bash tester
+WORKDIR /src
+COPY . /src
+RUN chown -R tester:tester /src
+USER tester
+
+ENV USUAL_DRY_RUN=1
+ENTRYPOINT ["/bin/bash", "test/run.sh"]
