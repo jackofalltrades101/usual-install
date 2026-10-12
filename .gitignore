@@ -13,6 +13,7 @@ sensor.crx
 __pycache__/
 *.pyc
 test/screenshots/
+!docs/img/
 # Core dumps from emulated test runs
 *.core
 core
