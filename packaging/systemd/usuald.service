@@ -29,6 +29,7 @@ LockPersonality=yes
 RuntimeDirectory=usual-install
 RuntimeDirectoryMode=0755
 StateDirectory=usual-install
+CacheDirectory=usual-install
 ConfigurationDirectory=usual-install
 
 [Install]

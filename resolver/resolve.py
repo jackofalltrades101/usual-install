@@ -137,6 +137,17 @@ def _path_prefix_matches(entry_path, page_path):
     return page_path == entry_path or page_path.startswith(entry_path + "/")
 
 
+def _size(entries):
+    """How many distinct apps a bucket holds, for the shared-hosting limit.
+
+    AUR packages ride alongside the Flathub apps for the same site rather than
+    counting as extra apps, so adding them never pushes a vendor's site over
+    the limit. A site only the AUR covers counts its AUR packages.
+    """
+    apps = [e for e in entries if e.get("backend") != "aur"]
+    return len(apps) if apps else len(entries)
+
+
 def resolve(page_url, catalogue):
     """Return (candidates, reason). candidates is a possibly-empty list."""
     try:
@@ -163,20 +174,20 @@ def resolve(page_url, catalogue):
     if matched:
         longest = max(len(e["path"]) for e in matched)
         best = _dedupe([e for e in matched if len(e["path"]) == longest])
-        if len(best) <= limit:
+        if _size(best) <= limit:
             return best, f"hostname+path {host}{best[0]['path']}"
-        return [], f"{len(best)} apps share {host}{best[0]['path']}; shared hosting"
+        return [], f"{_size(best)} apps share {host}{best[0]['path']}; shared hosting"
 
     # 2. hostname root
     if host_bucket:
         rooted = _dedupe([e for e in host_bucket if not e.get("path")])
-        if rooted and len(rooted) <= limit:
+        if rooted and _size(rooted) <= limit:
             return rooted, f"hostname {host}"
         # Last resort on this host: an app declares it as home but under a
         # path that does not cover this page. Only safe for entries whose path
         # is a vendor section, never for per-app directory pages.
         loose = _dedupe([e for e in host_bucket if not path_names_the_app(e)])
-        if loose and len(loose) <= limit:
+        if loose and _size(loose) <= limit:
             return loose, f"hostname {host} (unmatched path)"
 
     # 3. registrable domain
@@ -185,9 +196,31 @@ def resolve(page_url, catalogue):
                           if not path_names_the_app(e)])
     if not dom_bucket:
         return [], f"no catalogue entry for {dom}"
-    if len(dom_bucket) > limit:
-        return [], f"{len(dom_bucket)} apps share {dom}; shared hosting, not a vendor page"
+    if _size(dom_bucket) > limit:
+        return [], f"{_size(dom_bucket)} apps share {dom}; shared hosting, not a vendor page"
     return dom_bucket, f"domain {dom}"
+
+
+def rank(candidates, aur_ok):
+    """Order candidates the way the installer should offer them; drop the unusable.
+
+    The default -- the one the Install button acts on -- is the most
+    trustworthy way to get the vendor's program onto this machine:
+
+      1. a Flathub app its developer publishes (verified)
+      2. the AUR package for the site, on machines that can build it -- often
+         what the vendor itself links to for Arch, as Mojang does
+      3. a community-packaged Flathub app
+
+    AUR entries are removed entirely where they cannot be built (any non-Arch
+    system), so they never surface as a choice that would fail.
+    """
+    def key(c):
+        if c.get("backend") == "aur":
+            return 1
+        return 0 if c.get("verified") else 2
+    usable = [c for c in candidates if aur_ok or c.get("backend") != "aur"]
+    return sorted(usable, key=key)
 
 
 def _dedupe(entries):
@@ -220,6 +253,21 @@ def _self_test():
             # A vendor section path, by contrast, should still cover the host.
             "libreoffice.org": [{"id": "org.libreoffice.LibreOffice", "name": "LibreOffice",
                                  "path": "/discover/libreoffice"}],
+            # The same app from Flathub and the AUR is one app, two sources.
+            "minecraft.net": [
+                {"id": "aur:minecraft-launcher", "name": "minecraft-launcher",
+                 "path": "", "backend": "aur"},
+                {"id": "com.mojang.Minecraft", "name": "Minecraft", "path": "",
+                 "backend": "flatpak"}],
+            # A site with eight Flathub apps plus AUR packages is still a vendor.
+            "kde-like.example": (
+                [{"id": f"org.k.A{i}", "name": f"A{i}", "path": "", "backend": "flatpak"}
+                 for i in range(8)]
+                + [{"id": f"aur:a{i}", "name": f"a{i}", "path": "", "backend": "aur"}
+                   for i in range(3)]),
+            # A site only the AUR covers.
+            "aur-only.example": [{"id": "aur:tool", "name": "tool", "path": "",
+                                  "backend": "aur"}],
         },
         "domains": {
             "zoom.us": [{"id": "us.zoom.Zoom", "name": "Zoom"}],
@@ -249,6 +297,9 @@ def _self_test():
         ("https://flathub.org/apps/eu.jumplink.Learn6502", 1, "directory page, exact app"),
         ("https://www.libreoffice.org/download/download-libreoffice/", 1,
          "vendor section path still covers the host"),
+        ("https://www.minecraft.net/en-us/download", 2, "Flathub and AUR side by side"),
+        ("https://kde-like.example/", 11, "AUR entries do not count toward the limit"),
+        ("https://aur-only.example/download", 1, "a site only the AUR covers"),
     ]
     failures = 0
     for url, expected, label in cases:
@@ -256,6 +307,23 @@ def _self_test():
         ok = len(got) == expected
         failures += not ok
         print(f"  {'ok  ' if ok else 'FAIL'}  {label:38} {len(got)} (want {expected})  [{reason}]")
+
+    mc = resolve("https://www.minecraft.net/en-us/download", cat)[0]
+    for c in mc:
+        c.setdefault("verified", False)
+    order = [c["id"] for c in rank(mc, aur_ok=True)]
+    ok = order == ["aur:minecraft-launcher", "com.mojang.Minecraft"]
+    failures += not ok
+    print(f"  {'ok  ' if ok else 'FAIL'}  {'Arch: AUR before community Flathub':38} {order}")
+    order = [c["id"] for c in rank(mc, aur_ok=False)]
+    ok = order == ["com.mojang.Minecraft"]
+    failures += not ok
+    print(f"  {'ok  ' if ok else 'FAIL'}  {'non-Arch: AUR dropped':38} {order}")
+    vz = [{"id": "aur:x", "backend": "aur"}, {"id": "v", "verified": True}]
+    order = [c["id"] for c in rank(vz, aur_ok=True)]
+    ok = order == ["v", "aur:x"]
+    failures += not ok
+    print(f"  {'ok  ' if ok else 'FAIL'}  {'verified Flathub before AUR':38} {order}")
 
     print()
     for name, want_win in [("PhotoshopSetup.exe", True), ("office.msi", True),

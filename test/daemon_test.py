@@ -82,6 +82,11 @@ def main():
             "native_hint": "curl", "path": "",
         }]
         data["domains"]["curl.se"] = list(data["hosts"]["curl.se"])
+        data["hosts"]["aur-test.example"] = [{
+            "id": "aur:usual-test", "name": "usual-test", "summary": "",
+            "backend": "aur", "aur_name": "usual-test", "pkgbase": "usual-test",
+            "maintainer": "someone", "votes": 50, "snapshot": "", "path": "",
+        }]
         cat.write_text(json.dumps(data))
         key = td / "k.key"; pub = td / "k.pub"
         subprocess.run(["openssl", "genpkey", "-algorithm", "ed25519", "-out", str(key)],
@@ -136,6 +141,21 @@ def main():
             done, _ = client.call("install", id="us.zoom.Zoom", backend="flatpak-user")
             check(not done.get("ok") and "session agent" in done.get("reason", ""),
                   "refuses to run flatpak --user as the daemon", done.get("reason"))
+
+            print("\n--- AUR operations accept only catalogued AUR entries ---")
+            done, _ = client.call("install-aur", id="us.zoom.Zoom", paths=["/etc/shadow"])
+            check(not done.get("ok") and "not an AUR package" in done.get("reason", ""),
+                  "install-aur refuses a Flathub entry", done.get("reason"))
+            done, _ = client.call("aur-deps", id="aur:not-in-catalogue", deps=["bash"])
+            check(not done.get("ok") and "not an AUR package" in done.get("reason", ""),
+                  "aur-deps refuses an id absent from the catalogue", done.get("reason"))
+            done, _ = client.call("install-aur", id="aur:usual-test",
+                                  paths=["/etc/shadow"])
+            check(not done.get("ok"), "install-aur refuses a file outside the build "
+                  "directory", done.get("reason"))
+            done, _ = client.call("aur-deps", id="aur:usual-test", deps=["bash; reboot"])
+            check(not done.get("ok"), "aur-deps refuses a hostile dependency name",
+                  done.get("reason"))
 
             print("\n--- native installs must match the vendor's own domain ---")
             done, _ = client.call("install", id="us.zoom.Zoom", backend="native")

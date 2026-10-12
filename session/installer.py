@@ -27,12 +27,25 @@ sys.path.insert(0, str(_ROOT / "compat"))
 sys.path.insert(0, str(_ROOT / "daemon"))
 import setup as compat_setup  # noqa: E402
 import client as daemon_client  # noqa: E402
+sys.path.insert(0, str(_ROOT / "session"))
+import aurbuild  # noqa: E402
 
 FLATHUB_REPO = "https://dl.flathub.org/repo/flathub.flatpakrepo"
 # Containers and CI have no usable flatpak. USUAL_DRY_RUN exercises the whole
 # window -- picker, progress, log, completion -- without touching the system.
 DRY_RUN = os.environ.get("USUAL_DRY_RUN") == "1"
 PCT = re.compile(r"(\d{1,3})\s*%")
+
+
+def source_label(c):
+    """Where a candidate comes from, as the picker shows it."""
+    if c.get("backend") == "aur":
+        return "AUR, built on this computer"
+    if c.get("verified"):
+        return "Flathub, from the developer"
+    if c.get("verified") is False:
+        return "Flathub, community package"
+    return c.get("id", "")
 
 
 class InstallerWindow(Gtk.ApplicationWindow):
@@ -60,13 +73,25 @@ class InstallerWindow(Gtk.ApplicationWindow):
         self.subtitle.add_css_class("dim-label")
         outer.append(self.subtitle)
 
-        # Picker only when the domain genuinely maps to more than one product.
+        # An AUR package is a community build script. Link to it so anyone who
+        # wants to read what will run can, before pressing Install.
+        self.script_link = Gtk.LinkButton(label="View the build script")
+        self.script_link.set_halign(Gtk.Align.START)
+        self.script_link.set_visible(False)
+        outer.append(self.script_link)
+
+        # Picker when the site maps to more than one product, or one product
+        # available from more than one source (Flathub and the AUR, say).
         self.combo = None
         if len(candidates) > 1:
-            pick = Gtk.Label(xalign=0, label="This site offers more than one application:")
+            same_app = len({c.get("summary", "") for c in candidates}) == 1 or any(
+                c.get("backend") == "aur" for c in candidates)
+            pick = Gtk.Label(xalign=0, label=(
+                "Choose how to install it:" if same_app
+                else "This site offers more than one application:"))
             outer.append(pick)
             self.combo = Gtk.DropDown.new_from_strings(
-                [f"{c['name']}  ({c['id']})" for c in candidates])
+                [f"{c['name']}  ({source_label(c)})" for c in candidates])
             self.combo.connect("notify::selected", self.on_pick)
             outer.append(self.combo)
 
@@ -105,10 +130,40 @@ class InstallerWindow(Gtk.ApplicationWindow):
     def refresh_subtitle(self):
         c = self.chosen
         size = c.get("summary") or "No description provided."
+        is_aur = c.get("backend") == "aur"
+        self.script_link.set_visible(is_aur)
+        self.install_btn.set_label("Build and install" if is_aur else "Install")
+        if is_aur:
+            self.script_link.set_uri(
+                "https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h="
+                + c.get("pkgbase", ""))
+            self.subtitle.set_markup(
+                f"{GLib.markup_escape_text(size)}\n"
+                f"<tt>{GLib.markup_escape_text(c.get('aur_name', ''))}</tt> · AUR · "
+                f"built on this computer\n"
+                + GLib.markup_escape_text(
+                    f"⚠ Community build script, maintained by {c.get('maintainer')} "
+                    f"({c.get('votes')} votes). Like a Windows installer, it runs "
+                    f"code on your computer, and you will be asked for your "
+                    f"password before it is installed."))
+            self.heading.set_markup(
+                f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(c['name'])}</span>")
+            self.set_title(f"{c['name']} Installer")
+            return
+        # Say who actually published it. An unverified Flathub app is usually a
+        # community repackage, and "Flathub" alone reads as more official than
+        # that. Catalogues built before the flag existed show neither line.
+        origin = ""
+        if c.get("verified") is True:
+            origin = "\n✓ Published by the developer (verified on Flathub)"
+        elif c.get("verified") is False:
+            origin = ("\n⚠ Community package: not published or supported by "
+                      "the developer")
         self.subtitle.set_markup(
             f"{GLib.markup_escape_text(size)}\n"
             f"<tt>{GLib.markup_escape_text(c['id'])}</tt> · "
-            f"{GLib.markup_escape_text(c.get('remote', 'flathub'))} · user install")
+            f"{GLib.markup_escape_text(c.get('remote', 'flathub'))} · user install"
+            f"{GLib.markup_escape_text(origin)}")
         self.heading.set_markup(
             f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(c['name'])}</span>")
         self.set_title(f"{c['name']} Installer")
@@ -173,6 +228,9 @@ class InstallerWindow(Gtk.ApplicationWindow):
 
     def run_install(self):
         app_id = self.chosen["id"]
+        if self.chosen.get("backend") == "aur" and not DRY_RUN:
+            self.run_aur()
+            return
         if DRY_RUN:
             GLib.idle_add(self.append_log, f"[dry run] would install {app_id}\n")
             for pct in range(0, 101, 10):
@@ -215,6 +273,26 @@ class InstallerWindow(Gtk.ApplicationWindow):
                 return
         GLib.idle_add(self.finish, True, None)
 
+    def run_aur(self):
+        holder = []
+        self.proc_holder = holder
+
+        def status(text):
+            GLib.idle_add(self.progress.set_text, text)
+            GLib.idle_add(self.progress.pulse)
+
+        def log(text):
+            GLib.idle_add(self.append_log, text)
+            GLib.idle_add(self.progress.pulse)
+            if holder:
+                self.proc = holder[-1]
+
+        try:
+            ok, why = aurbuild.build_and_install(self.chosen, log, status, holder)
+        except Exception as e:
+            ok, why = False, f"unexpected error: {e}"
+        GLib.idle_add(self.finish, ok, None if ok else why)
+
     def set_pct(self, pct):
         self.progress.set_fraction(min(pct, 100) / 100)
         self.progress.set_text(f"Installing… {pct}%")
@@ -238,8 +316,14 @@ class InstallerWindow(Gtk.ApplicationWindow):
         if DRY_RUN:
             self.close()
             return
-        subprocess.Popen(["flatpak", "run", self.chosen["id"]], start_new_session=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if self.chosen.get("backend") == "aur":
+            desktop = aurbuild.desktop_entry(self.chosen["aur_name"])
+            cmd = ["gtk-launch", desktop] if desktop else None
+        else:
+            cmd = ["flatpak", "run", self.chosen["id"]]
+        if cmd:
+            subprocess.Popen(cmd, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.close()
 
 

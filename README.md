@@ -43,7 +43,34 @@ installs software because of a web page you visited.
   from nowhere else.
 - When a site genuinely offers several products, it asks. It does not guess.
 - The catalogue is signed, and one that fails verification is not used at all.
+- The window says who published what you are installing: the developer, or a
+  community packager.
 - Nothing installs without you clicking **Install**.
+
+## The AUR, handled for you
+
+On Arch and CachyOS, plenty of vendors point at the AUR — Minecraft's download
+page does — and the AUR is where newcomers get stuck. Usual Install builds and
+installs AUR packages the way a Windows installer would: one window, one button,
+a password prompt before anything is installed.
+
+An AUR package is a build script someone in the community wrote, so it gets
+stricter treatment than anything else:
+
+- Only AUR packages in the signed catalogue are offered: maintained, not flagged
+  out of date, not a `-git` build, at least 10 votes, and declaring the vendor's
+  own site. Where several claim the same site, only the most-voted is used.
+- If the package has changed hands since the catalogue was built, it is refused.
+- It builds as you, never as root, in `~/.cache/usual-install/aur`, and the
+  window links to the build script so you can read it first.
+- Installing the result asks for your password **every time**. The service
+  copies the built file somewhere you cannot touch and checks it is the package
+  the catalogue named before installing it.
+- Its dependencies must come from the official repositories. A package that
+  needs other AUR packages is refused rather than built in a chain.
+
+When the developer publishes on Flathub, that is still offered first; the AUR
+comes next, ahead of community-packaged Flathub apps.
 
 ![Compatibility window](docs/img/compat.png)
 
@@ -143,6 +170,9 @@ sudo systemctl enable --now usual-install-update.timer
 - **Compatibility coverage is thin.** WineHQ's database has no API, so the
   Windows-application support draws on a much smaller curated list and will
   usually say *not supported* even for programs that run fine.
+- **AUR packages are not updated by `pacman -Syu`.** That is true of every AUR
+  install. An AUR helper such as `paru` or `yay` (CachyOS ships one) updates
+  them, or download the app from its site again.
 - Chrome, Edge and Opera are expected to work but have not been tested on ARM,
   because none of them ship an ARM build for Linux.
 
@@ -151,9 +181,6 @@ sudo systemctl enable --now usual-install-update.timer
 - **Firefox, LibreWolf, Zen.** Different extension format, different setup
   mechanism, and Mozilla signing is mandatory. It is a second implementation
   rather than a flag, and is not started.
-- **The AUR as a package source.** An AUR build script is arbitrary code, and
-  running it would put the choice of what executes outside the signed catalogue.
-  Arch installs come from the official repositories.
 - **Silent installs.** Nothing will ever install because you visited a page. The
   window always appears and you always click Install.
 
