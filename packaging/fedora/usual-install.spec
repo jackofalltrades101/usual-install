@@ -35,9 +35,17 @@ test -f sensor.crx || { echo "sensor.crx missing; run 'make all'"; exit 1; }
 
 %install
 make install DESTDIR=%{buildroot} PREFIX=%{_prefix}
+# Installing this package is the request to run it, so the units are enabled
+# by preset and started on first install, as the Debian and Arch packages do.
+install -d %{buildroot}%{_presetdir}
+printf 'enable usuald.service\nenable usual-install-update.timer\n' \
+  > %{buildroot}%{_presetdir}/80-usual-install.preset
 
 %post
 %systemd_post usuald.service usual-install-update.timer
+if [ $1 -eq 1 ]; then
+  systemctl start usuald.service usual-install-update.timer >/dev/null 2>&1 || :
+fi
 
 %preun
 %systemd_preun usuald.service usual-install-update.timer
@@ -59,6 +67,7 @@ make install DESTDIR=%{buildroot} PREFIX=%{_prefix}
 %{_unitdir}/usuald.service
 %{_unitdir}/usual-install-update.service
 %{_unitdir}/usual-install-update.timer
+%{_presetdir}/80-usual-install.preset
 %{_datadir}/polkit-1/actions/org.usualinstall.policy
 %{_datadir}/applications/usual-install.desktop
 %{_datadir}/icons/hicolor/scalable/apps/usual-install.svg

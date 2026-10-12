@@ -63,13 +63,10 @@ sudo apt install ./usual-install_*_all.deb
 sudo dnf install ./usual-install-*.noarch.rpm
 ```
 
-Then start it, and turn on weekly catalogue updates:
+That is all: the package starts the service and turns on weekly catalogue
+updates itself. Restart your browser and visit a download page.
 
-```sh
-sudo systemctl enable --now usuald.service usual-install-update.timer
-```
-
-Restart your browser and visit a download page.
+To switch it off later: `sudo systemctl disable --now usuald.service`.
 
 ### Building it yourself
 
@@ -99,7 +96,8 @@ cp packaging/arch/PKGBUILD . && makepkg -si
 ```
 
 Or install straight from the tree with `sudo make install`, though uninstalling
-is then your problem.
+is then your problem. A tree install does not start anything; run
+`sudo systemctl enable --now usuald.service` afterwards.
 
 A self-built copy trusts only its own signing key, so it cannot use the
 published catalogue updates; leave `catalogue_url` empty or point it at a
