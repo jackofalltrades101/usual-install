@@ -393,19 +393,81 @@ class Daemon:
             # extension" true; without it the native host is there but nothing
             # ever talks to it.
             if crx and version:
-                for d in b["system_ext"]:
-                    target = d / f"{ext_id}.json"
-                    if not force and target.exists():
-                        continue
-                    try:
-                        d.mkdir(parents=True, exist_ok=True)
-                        target.write_text(json.dumps(
-                            {"external_crx": str(crx),
-                             "external_version": version}, indent=2) + "\n")
-                        log(f"preinstalled sensor for {b['name']} -> {target}")
-                        wrote += 1
-                    except OSError as e:
-                        log(f"could not preinstall for {b['name']}: {e}")
+                entry = json.dumps({"external_crx": str(crx),
+                                    "external_version": version}, indent=2) + "\n"
+                # Deliberately NOT written to the system-wide extensions
+                # directory. Debian's Chromium treats entries there as unpacked
+                # extension directories, and the resulting error aborts its
+                # external-extension provider before the per-profile manifest is
+                # ever read -- so writing it does not merely fail, it actively
+                # prevents the sensor from installing at all. The per-profile
+                # location is honoured by every browser tested (Chromium, Brave,
+                # Vivaldi) and is what makes the mechanism work.
+                self.clear_stale_system_manifests(b, ext_id)
+                wrote += self.preinstall_per_user(b, ext_id, entry, force)
+        return wrote
+
+    def clear_stale_system_manifests(self, browser, ext_id):
+        """Remove a system-wide manifest an older version of us may have left.
+
+        Leaving one behind would keep the browser from reading the per-profile
+        manifest, so an upgrade must clean up after the previous behaviour.
+        """
+        for d in browser["system_ext"]:
+            target = d / f"{ext_id}.json"
+            if target.exists():
+                try:
+                    target.unlink()
+                    log(f"removed stale system manifest {target}")
+                except OSError:
+                    pass
+
+    def preinstall_per_user(self, browser, ext_id, entry, force):
+        """Write the preinstall manifest into each existing user profile.
+
+        The system-wide directory is the documented location and upstream
+        Chromium honours it, but Debian's build treats entries there as
+        unpacked extension directories rather than JSON manifests -- it finds
+        the file and then looks for `<file>.json/_metadata/`. The per-profile
+        `External Extensions` directory is honoured everywhere it has been
+        tested, so write both and let whichever one the browser reads win.
+        """
+        wrote = 0
+        rel = browser["config"].relative_to(pathlib.Path(os.path.expanduser("~"))) \
+            if str(browser["config"]).startswith(os.path.expanduser("~")) else None
+        if rel is None:
+            return 0
+        seen = set()
+        for home in pathlib.Path("/home").glob("*"):
+            if not home.is_dir():
+                continue
+            real = home.resolve()
+            if real in seen:          # /home/x -> /home/y symlinks are common
+                continue
+            seen.add(real)
+            profile = real / rel
+            # Only write into a profile that already exists. Creating one as
+            # root leaves the whole profile directory root-owned, and the
+            # browser -- which runs as the user -- then cannot use it at all.
+            # That is far worse than waiting: a profile appears the moment
+            # someone runs the browser, and the next poll provisions it.
+            if not profile.is_dir():
+                continue
+            d = profile / "External Extensions"
+            target = d / f"{ext_id}.json"
+            if not force and target.exists():
+                continue
+            try:
+                st = home.stat()
+                d.mkdir(parents=True, exist_ok=True)
+                target.write_text(entry)
+                # The browser runs as that user, so the files must be theirs.
+                os.chown(d, st.st_uid, st.st_gid)
+                os.chown(target, st.st_uid, st.st_gid)
+                log(f"preinstalled sensor for {browser['name']} ({home.name}) -> {target}")
+                wrote += 1
+            except OSError as e:
+                log(f"could not preinstall for {browser['name']} in {home}: {e}")
         return wrote
 
     def provision_loop(self):

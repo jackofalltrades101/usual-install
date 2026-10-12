@@ -11,8 +11,14 @@ RestartSec=5
 
 # The daemon installs packages, so it cannot be locked down to nothing, but
 # everything it does not need is removed.
+#
+# ProtectHome stays off deliberately. Debian's Chromium does not honour the
+# system-wide external-extension directory -- it treats entries there as
+# unpacked extension directories -- so the manifest has to be written into each
+# user's own profile as well. With ProtectHome=yes /home is invisible and the
+# browser silently never receives the sensor, which is the entire product.
 NoNewPrivileges=no
-ProtectHome=yes
+ProtectHome=no
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

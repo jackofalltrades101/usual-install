@@ -74,6 +74,14 @@ usual-provision install --flatpak            # only if you have Flatpak browsers
 Restart your browser. Nothing else is needed — there is no extension to install,
 and browsers added later are picked up automatically.
 
+**One caveat, measured rather than assumed.** The sensor is written into each
+existing browser profile, so it appears on the browser's *next* launch. A
+profile that does not exist yet — a browser you have installed but never run —
+is provisioned within one poll interval (30s by default) after you first run it,
+and the sensor appears on the launch after that. The daemon deliberately does
+not create profile directories itself: doing so as root leaves the profile
+root-owned and the browser, which runs as you, cannot use it at all.
+
 ### Who holds the signing key
 
 `make all` generates a keypair and signs the catalogue with it, so a self-built
@@ -174,9 +182,9 @@ image runs the full suite on an x86_64 host.
 ## Browsers
 
 **The user never installs an extension.** `usuald` writes a preinstall manifest
-into each browser's own extensions directory and the browser installs the
-sensor itself on next launch. Verified by launching each browser against a
-fresh profile and looking for the extension on disk afterwards:
+into each browser profile and the browser installs the sensor itself on next
+launch. Verified by launching each browser against a fresh profile and looking
+for the extension on disk afterwards:
 
 | Browser | Result |
 |---|---|
@@ -188,6 +196,15 @@ fresh profile and looking for the extension on disk afterwards:
 Local `external_crx` still works on these versions, so the feared fallback to a
 self-hosted `external_update_url` is not needed. `test/Dockerfile.browsers`
 covers all six on an x86_64 host.
+
+**Not the system-wide directory.** `/usr/share/chromium/extensions/` is the
+documented system location, and writing there is actively harmful on Debian:
+its Chromium treats entries in that directory as unpacked extension
+directories, fails on the JSON, and aborts its external-extension provider
+*before* reading the per-profile manifest. An earlier version wrote both, and
+the system one silently prevented the sensor from ever installing. The daemon
+now writes per-profile only, and removes any stale system manifest left by a
+previous version.
 
 **Flatpak browsers work too, and need no root.** `flatpak override --user`
 requires no privilege, so `usual-provision install --flatpak` grants the
