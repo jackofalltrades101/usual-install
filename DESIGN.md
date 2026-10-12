@@ -397,10 +397,10 @@ It stays available as an opt-in for people who want it locked down.
 
 ## Open questions
 
-- **Flatpak browsers: why was the sensor not installed?** The permission grant works
-  rootless and the sandbox can reach the host (`HOST-REACHED`), but the sandboxed
-  Chromium did not install the extension from its preinstall manifest. This is the last
-  thing between Flatpak browsers being fully supported and being a documented gap.
+- **Resolved.** Flatpak browsers are fully provisioned, rootlessly. The cause was that
+  Flatpak does not redirect `~/.config` and `~/.local/share` inside the sandbox — it points
+  `XDG_CONFIG_HOME` and `XDG_DATA_HOME` at `~/.var/app/<id>/{config,data}` by their real
+  absolute paths, so a manifest naming `~/.local/share/...` is invisible to the browser.
 - **Chrome, Edge and Opera preinstall.** Settled for Chromium, Brave and Vivaldi; these
   three publish no arm64 Linux build so they could not be tested here. The harness covers
   all six on an x86_64 host — one run finishes the matrix.

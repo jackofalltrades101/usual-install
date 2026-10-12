@@ -94,7 +94,9 @@ else
 fi
 
 step "tier 1k — polkit authorisation"
-if command -v pkcheck >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+if [ "$(id -u)" -eq 0 ]; then
+  skip "polkit is bypassed for root; run the suite as a normal user to cover it"
+elif command -v pkcheck >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
   bash test/polkit_test.sh >$LOGDIR/polkit.log 2>&1 \
     && ok "a polkit-authorised privileged install succeeds" \
     || { bad "polkit"; tail -20 $LOGDIR/polkit.log; }

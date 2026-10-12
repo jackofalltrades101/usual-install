@@ -12,14 +12,28 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 LOGDIR=$(mktemp -d)
 RULE=/etc/polkit-1/rules.d/49-usual-install-test.rules
+POLICY=/usr/share/polkit-1/actions/org.usualinstall.policy
+STAGED_POLICY=no
 PASS=0; FAIL=0
 ok()  { printf '   \033[32mpass\033[0m  %s\n' "$1"; PASS=$((PASS+1)); }
 bad() { printf '   \033[31mFAIL\033[0m  %s\n' "$1"; FAIL=$((FAIL+1)); }
 step(){ printf '\n\033[1m== %s\033[0m\n' "$1"; }
-cleanup() { sudo rm -f "$RULE" 2>/dev/null; sudo pkill -f "daemon/usuald.py" 2>/dev/null; rm -rf "$LOGDIR" "$TD" 2>/dev/null; }
+cleanup() {
+  sudo rm -f "$RULE" 2>/dev/null
+  [ "$STAGED_POLICY" = yes ] && sudo rm -f "$POLICY" 2>/dev/null
+  sudo pkill -f "daemon/usuald.py" 2>/dev/null
+  rm -rf "$LOGDIR" "$TD" 2>/dev/null
+}
 trap cleanup EXIT
 
-command -v pkcheck >/dev/null || { echo "polkit not installed; nothing to prove"; exit 0; }
+command -v pkcheck >/dev/null || { echo "   polkit not installed; nothing to prove"; exit 0; }
+if [ "$(id -u)" -eq 0 ]; then
+  # polkit is bypassed for root by design, so running this as root would
+  # exercise nothing. It has to be driven by an unprivileged caller.
+  echo "   running as root: polkit is bypassed by design, so this proves nothing."
+  echo "   run it as an unprivileged user with sudo available."
+  exit 0
+fi
 PKG=${1:-htop}
 WHO=$(id -un)
 
@@ -51,6 +65,18 @@ PY
 python3 catalogue/sign.py keygen --key "$TD/k.key" --pubkey "$TD/k.pub" >/dev/null 2>&1
 python3 catalogue/sign.py sign "$TD/catalogue.json" --key "$TD/k.key" >/dev/null 2>&1
 ok "signed test catalogue naming $PKG"
+
+step "the action must be registered with polkit"
+# Normally the package installs this. Running from a source tree (or after the
+# package has been removed) it is absent, so stage it and take it away again.
+if ! pkaction --action-id org.usualinstall.install >/dev/null 2>&1; then
+  sudo install -D -m 0644 packaging/polkit/org.usualinstall.policy "$POLICY"
+  STAGED_POLICY=yes
+  sleep 2
+fi
+pkaction --action-id org.usualinstall.install >/dev/null 2>&1 \
+  && ok "org.usualinstall.install is registered$([ "$STAGED_POLICY" = yes ] && echo " (staged by this test)")" \
+  || { bad "could not register the action"; exit 1; }
 
 step "install the polkit rule that authorises $WHO"
 sudo tee "$RULE" >/dev/null <<EOF

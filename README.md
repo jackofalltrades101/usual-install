@@ -144,12 +144,17 @@ Local `external_crx` still works on these versions, so the feared fallback to a
 self-hosted `external_update_url` is not needed. `test/Dockerfile.browsers`
 covers all six on an x86_64 host.
 
-**Flatpak browsers** are provisionable without root: `flatpak override --user`
-needs no privilege, so `usual-provision install --flatpak` grants the
+**Flatpak browsers work too, and need no root.** `flatpak override --user`
+requires no privilege, so `usual-provision install --flatpak` grants the
 permission, installs a `flatpak-spawn --host` wrapper the sandbox can execute,
-and writes the manifest inside the sandbox's view of `~/.config`. A sandboxed
-Chromium demonstrably reaches the host through it. One piece is unconfirmed —
-see Known gaps.
+and writes the manifest and CRX where the sandbox can actually read them. A
+sandboxed Chromium both reaches the host and installs the sensor itself.
+
+The subtlety that cost a round of debugging: Flatpak does **not** redirect
+`~/.config` and `~/.local/share` inside the sandbox. It points
+`XDG_CONFIG_HOME` and `XDG_DATA_HOME` at `~/.var/app/<id>/{config,data}` by
+their real absolute paths. A manifest referring to `~/.local/share/...` looks
+correct and is invisible to the browser.
 
 **Snap browsers cannot be supported.** Strict confinement offers no route to an
 arbitrary host binary and no user-grantable permission that changes it. They are
@@ -217,16 +222,49 @@ Worth recording, because each was invisible to every earlier layer:
   `GSK_RENDERER=cairo` fixes it.
 - **The signing key was nearly packaged.** The staged-install test now fails if
   any private key appears in the package.
+- **`debian/compat` conflicted with `debhelper-compat`** — the package would
+  not build at all, which only building it could reveal.
+- **Uninstall left `/usr/lib/usual-install` behind**, because Python wrote
+  `__pycache__` after installation and dpkg will not remove a directory holding
+  files it does not know about. Bytecode is now shipped with the package and
+  the runtime writes none (`python3 -B`).
+- **Fixed `/tmp` log paths broke every test under a second user.** With
+  `fs.protected_regular`, root cannot write a file another user owns in a
+  sticky directory, so 16 passing tests reported as failures while their stale
+  logs said "all passed".
+
+## Verified end to end
+
+The production chain, not a staging approximation:
+
+```
+.deb built → installed → systemctl enable --now usuald → service active
+  → catalogue verified → Chromium provisioned to /etc/chromium/...
+  → real browser → sensor → session agent → resolved via usuald
+```
+
+Also closed, each by actually doing it rather than reading:
+
+- **polkit authorises a real privileged install.** With a rule permitting the
+  user, an unprivileged caller installed `htop` through `apt` via the daemon,
+  homepage cross-check passing (`htop declares https://htop.dev/ — matches
+  htop.dev`). Every earlier test had only ever seen polkit *refuse*.
+- **The native fallback runs.** Pointed at a Flathub id that does not exist, the
+  installer window failed over to usuald and installed the distro package.
+- **All three packages build.** `dpkg-buildpackage`, `rpmbuild` and `makepkg`,
+  each checked for stray private keys.
+- **Install → upgrade → uninstall → purge is clean**, leaving nothing behind.
 
 ## Known gaps
 
 - **Chrome, Edge and Opera preinstall** is unverified; none publishes an arm64
   Linux build. One run of the browsers image on x86_64 settles it.
-- **Flatpak browsers**: the permission grant works and the sandbox reaches the
-  host, but the sandboxed Chromium did not install the sensor from its
-  preinstall manifest in testing. Cause unknown.
 - **A real compatibility install** — real Bottles, real Wine, a real `.exe` —
   needs x86_64 hardware. The orchestration is tested against stub runners.
 - **Catalogue governance**: signing is implemented, but who holds the key, who
-  may add an entry, and how revocation works are unanswered.
-- **AUR** is not a backend; Arch native installs come from the official repos.
+  may add an entry, and how revocation works are unanswered. `catalogue_url`
+  ships empty, so nothing updates until someone hosts a catalogue.
+- **AUR** is not a backend. Arch native installs come from the official
+  repositories only: an AUR PKGBUILD is arbitrary code, and running it would
+  put a decision outside the signed catalogue, which is the one thing this
+  design does not allow.
