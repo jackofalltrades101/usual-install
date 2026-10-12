@@ -359,6 +359,11 @@ class Daemon:
         crx = next((p for p in (DATA_DIR / "sensor.crx",
                                 pathlib.Path("/usr/share/usual-install/sensor.crx"),
                                 HERE.parent / "sensor.crx") if p.is_file()), None)
+        if crx is None:
+            # Writing a preinstall manifest that names a missing CRX leaves the
+            # browser silently unable to install the sensor, which looks exactly
+            # like the product not working.
+            log("no sensor.crx found; browsers will not be given the extension")
         version = None
         try:
             version = json.loads((HERE.parent / "sensor" / "manifest.json")

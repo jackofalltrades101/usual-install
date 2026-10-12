@@ -3,10 +3,22 @@
 	dh $@
 
 override_dh_auto_build:
-	# The catalogue is generated from Flathub metadata and needs network
-	# access, so it is built outside the package build where possible.
+	# The catalogue needs network access and the CRX needs a browser, so both
+	# are expected from `make all`. Refuse rather than ship something broken.
 	[ -f catalogue/catalogue.json ] || python3 catalogue/build_catalogue.py -o catalogue/catalogue.json
 	[ -f compat/compat.json ] || python3 compat/build_compat.py -o compat/compat.json
+	@test -f catalogue/catalogue.json.sig || { \
+	  echo "catalogue is unsigned; run 'make all' first"; exit 1; }
+	@test -f sensor.crx || { \
+	  echo "sensor.crx is missing; run 'make all' first"; exit 1; }
+
+override_dh_auto_clean:
+	# Deliberately does NOT run `make clean`. The catalogue, its signature and
+	# sensor.crx are produced by `make all` before packaging and are inputs to
+	# this build, not intermediates: cleaning them away silently shipped a
+	# package whose preinstall manifest pointed at a CRX that was not there.
+	rm -rf debian/usual-install
+	find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 override_dh_auto_test:
 	# Only the self-contained checks. The full suite starts browsers and a

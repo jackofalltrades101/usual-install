@@ -28,6 +28,10 @@ installed from Flathub or from the distribution's own repositories.
 %build
 [ -f catalogue/catalogue.json ] || python3 catalogue/build_catalogue.py -o catalogue/catalogue.json
 [ -f compat/compat.json ] || python3 compat/build_compat.py -o compat/compat.json
+# Both are produced by `make all` and carried in the source tarball; a package
+# without them installs a service that resolves nothing.
+test -f catalogue/catalogue.json.sig || { echo "catalogue is unsigned; run 'make all'"; exit 1; }
+test -f sensor.crx || { echo "sensor.crx missing; run 'make all'"; exit 1; }
 
 %install
 make install DESTDIR=%{buildroot} PREFIX=%{_prefix}
