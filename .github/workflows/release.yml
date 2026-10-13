@@ -162,7 +162,7 @@ jobs:
       - run: |
           mkdir src && tar -xzf tree.tar.gz -C src
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends debhelper devscripts fakeroot >/dev/null
+          sudo apt-get install -y --no-install-recommends build-essential debhelper devscripts fakeroot >/dev/null
           cd src && cp -a packaging/debian debian && dpkg-buildpackage -us -uc -b
           mkdir -p ../out && mv ../*.deb ../out/
       - uses: actions/upload-artifact@v4
