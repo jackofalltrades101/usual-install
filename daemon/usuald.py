@@ -544,6 +544,12 @@ class Daemon:
                 # Vivaldi) and is what makes the mechanism work.
                 self.clear_stale_system_manifests(b, ext_id)
                 wrote += self.preinstall_per_user(b, ext_id, entry, force)
+
+            # The host manifest has to reach the profile too, or the sensor
+            # loads, registers its listeners, and silently cannot call out.
+            wrote += self.write_per_user(
+                b, "NativeMessagingHosts", f"{prov.HOST_NAME}.json",
+                json.dumps(manifest, indent=2) + "\n", force)
         return wrote
 
     def clear_stale_system_manifests(self, browser, ext_id):
@@ -562,14 +568,28 @@ class Daemon:
                     pass
 
     def preinstall_per_user(self, browser, ext_id, entry, force):
-        """Write the preinstall manifest into each existing user profile.
+        """Write the preinstall manifest into each existing user profile."""
+        return self.write_per_user(browser, "External Extensions",
+                                   f"{ext_id}.json", entry, force)
 
-        The system-wide directory is the documented location and upstream
-        Chromium honours it, but Debian's build treats entries there as
-        unpacked extension directories rather than JSON manifests -- it finds
-        the file and then looks for `<file>.json/_metadata/`. The per-profile
-        `External Extensions` directory is honoured everywhere it has been
-        tested, so write both and let whichever one the browser reads win.
+    def write_per_user(self, browser, subdir, filename, content, force):
+        """Write one file into each existing user's profile for this browser.
+
+        Both of the files a browser needs from us live here, and neither works
+        reliably from the system-wide location:
+
+          External Extensions/   Debian's Chromium treats entries in the
+                                 system directory as unpacked extension
+                                 directories and errors on the JSON.
+          NativeMessagingHosts/  Brave does not read the system directory at
+                                 all. The manifest sat in
+                                 /etc/brave/native-messaging-hosts/ while the
+                                 browser looked in the profile, so every
+                                 download was let through and nothing was
+                                 logged -- the product appeared to do nothing.
+
+        Note the spelling difference: the system directories are
+        `native-messaging-hosts`, the per-profile one is `NativeMessagingHosts`.
         """
         wrote = 0
         rel = browser["config"].relative_to(pathlib.Path(os.path.expanduser("~"))) \
@@ -592,21 +612,21 @@ class Daemon:
             # someone runs the browser, and the next poll provisions it.
             if not profile.is_dir():
                 continue
-            d = profile / "External Extensions"
-            target = d / f"{ext_id}.json"
+            d = profile / subdir
+            target = d / filename
             if not force and target.exists():
                 continue
             try:
                 st = home.stat()
                 d.mkdir(parents=True, exist_ok=True)
-                target.write_text(entry)
+                target.write_text(content)
                 # The browser runs as that user, so the files must be theirs.
                 os.chown(d, st.st_uid, st.st_gid)
                 os.chown(target, st.st_uid, st.st_gid)
-                log(f"preinstalled sensor for {browser['name']} ({home.name}) -> {target}")
+                log(f"provisioned {browser['name']} ({home.name}) -> {target}")
                 wrote += 1
             except OSError as e:
-                log(f"could not preinstall for {browser['name']} in {home}: {e}")
+                log(f"could not provision {browser['name']} in {home}: {e}")
         return wrote
 
     def provision_loop(self):
