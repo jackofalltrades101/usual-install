@@ -87,18 +87,44 @@ comes next, ahead of community-packaged Flathub apps.
 
 ## Where applications come from
 
-In order, stopping at the first that works on your machine:
+**By default the developer's own package is offered first** — the `.deb`,
+`.rpm` or `.pkg.tar.zst` from the download page you were already on. It is the
+build the developer ships and tests, and it is the file you clicked.
 
-| Source | Needs a password | Notes |
+Every other source stays in the picker, so the choice is yours per
+application:
+
+| Source | Needs a password | |
 |---|---|---|
-| Flathub | no | installs into your own account, sandboxed |
-| Your distribution's repositories | once per session | checked against the vendor's own domain |
-| The AUR | once per session | Arch only, and only above a vote threshold |
-| **The developer's own package** | once per session | `.deb`, `.rpm`, `.pkg.tar.zst` — what you clicked |
+| **The developer's own package** | once per session | the default |
+| Flathub | no | sandboxed, your account only, updates itself |
+| Your distribution's repositories | once per session | checked against the vendor's domain |
+| The AUR | once per session | Arch only, above a vote threshold |
 
-The last is the fallback for everything that exists nowhere else. It is
-deliberately last: nobody but the developer has reviewed it, and the window
-says so before you install.
+Two things are worth knowing before leaving that default alone. A vendor's
+package has not been through anyone else's review, and **it usually cannot
+update itself** — the settings window says *no automatic updates* against
+exactly those, so you can see which ones you are now maintaining by hand.
+
+If you would rather have the reviewed, self-updating build first, change
+**Install by default** in settings to *Flathub and your distribution first*.
+The vendor package stays available in every installer window either way.
+
+## Keeping things up to date
+
+Settings lists everything Usual Install put on the machine, where each came
+from, and whether it can move on:
+
+```
+inkscape             apt      up to date (1.4.0)
+org.gnome.Loupe      Flathub  up to date (51.rc)
+discord              apt      no automatic updates — the developer's own package
+```
+
+**Update everything** updates the Flathub applications and any distribution
+packages that have somewhere to update from. The ones marked *no automatic
+updates* are yours to replace when the vendor publishes a new build; nothing
+can change that, and pretending otherwise would be worse than saying it.
 
 ## Installing
 

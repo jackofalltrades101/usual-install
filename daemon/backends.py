@@ -79,6 +79,16 @@ class Backend:
         """
         return {}
 
+    def update_info(self, pkg):
+        """(installed, available) versions, or (None, None) if not known.
+
+        A package installed from a vendor's own .deb only has an upgrade path
+        if that package also configured a repository. Many do not, and saying
+        so is the point: a vendor package you install by hand is one you keep
+        up to date by hand.
+        """
+        return (None, None)
+
     def homepage(self, pkg):
         """The homepage the DISTRO records for this package, or None.
 
@@ -122,6 +132,17 @@ class Pacman(Backend):
 
     def install_cmd(self, pkg):
         return ["pacman", "-S", "--noconfirm", "--needed", pkg]
+
+    def update_info(self, pkg):
+        q = subprocess.run(["pacman", "-Q", pkg], capture_output=True, text=True)
+        installed = q.stdout.split()[1] if q.returncode == 0 and q.stdout.split() else None
+        u = subprocess.run(["pacman", "-Qu", pkg], capture_output=True, text=True)
+        available = installed
+        if u.returncode == 0 and u.stdout.strip():
+            parts = u.stdout.split()
+            if len(parts) >= 4:
+                available = parts[-1]
+        return (installed, available)
 
     local_suffixes = (".pkg.tar.zst", ".pkg.tar.xz")
 
@@ -172,6 +193,29 @@ class Apt(Backend):
     def env(self):
         return dict(os.environ, DEBIAN_FRONTEND="noninteractive")
 
+    def update_info(self, pkg):
+        r = subprocess.run(["apt-cache", "policy", pkg],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            return (None, None)
+        inst = cand = None
+        from_repo = False
+        for line in r.stdout.splitlines():
+            t = line.strip()
+            if t.startswith("Installed:"):
+                inst = t.split(":", 1)[1].strip()
+            elif t.startswith("Candidate:"):
+                cand = t.split(":", 1)[1].strip()
+            elif "://" in t:
+                # apt reports a Candidate for anything installed, including a
+                # .deb that configured no repository. Only a remote source in
+                # the version table means there is somewhere to update from.
+                from_repo = True
+        none = ("(none)", "")
+        installed = None if inst in none else inst
+        available = None if (cand in none or not from_repo) else cand
+        return (installed, available)
+
     local_suffixes = (".deb",)
 
     def install_local_cmd(self, path):
@@ -219,6 +263,20 @@ class Dnf(Backend):
     def install_cmd(self, pkg):
         dnf = shutil.which("dnf5") or shutil.which("dnf")
         return [dnf, "install", "-y", pkg]
+
+    def update_info(self, pkg):
+        dnf = shutil.which("dnf5") or shutil.which("dnf")
+        inst = subprocess.run(["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}", pkg],
+                              capture_output=True, text=True)
+        installed = inst.stdout.strip() if inst.returncode == 0 else None
+        up = subprocess.run([dnf, "-q", "list", "--upgrades", pkg],
+                            capture_output=True, text=True)
+        available = None
+        for line in up.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0].split(".")[0] == pkg:
+                available = parts[1]
+        return (installed, available or installed)
 
     local_suffixes = (".rpm",)
 

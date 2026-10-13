@@ -60,6 +60,11 @@ CATALOGUE_PATHS = [
 DEFAULT_CONFIG = {
     "enabled": True,
     "backend_order": ["flatpak-user", "native"],
+    # Which source the Install button acts on by default. "vendor" is the
+    # package the developer serves from their own download page; "flathub"
+    # prefers the most reviewed source instead. Every source stays available
+    # in the installer either way.
+    "prefer_source": "vendor",
     "provision_interval_seconds": 30,
     "catalogue_url": "https://example.invalid/usual-install/catalogue.json",
     "update_interval_hours": 24,
@@ -183,11 +188,34 @@ class Daemon:
         self.config = config or load_config()
         self.catalogue = Catalogue(self.config.get("allow_unsigned_catalogue", False))
         self.install_lock = threading.Lock()
-        self.history = []
+        # Kept on disk: an update manager that forgets everything the service
+        # restarted is no use, and this is the only record of what Usual
+        # Install put on the machine.
+        self.history_path = DATA_DIR / "history.json"
+        self.history = self.load_history()
         self.provisioned = {}
         self.stop_event = threading.Event()
 
     # -- operations ---------------------------------------------------------
+
+    def load_history(self):
+        try:
+            data = json.loads(self.history_path.read_text())
+            return data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def record(self, entry):
+        """Append to the install record and persist it."""
+        self.history.append(entry)
+        self.history = self.history[-500:]
+        try:
+            self.history_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.history_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.history, indent=1))
+            tmp.replace(self.history_path)
+        except OSError as e:
+            log(f"could not write {self.history_path}: {e}")
 
     def op_status(self, req, peer, send):
         import provision as prov
@@ -247,8 +275,9 @@ class Daemon:
                              f"{backends.distro_family()} package and no "
                              f"{MACHINE_ARCH} build on Flathub."}})
             return
-        send({"type": "done", "ok": bool(usable),
-              "candidates": usable, "reason": reason})
+        send({"type": "done", "ok": bool(usable), "candidates": usable,
+              "reason": reason,
+              "prefer_source": self.config.get("prefer_source", "vendor")})
 
     @staticmethod
     def display_name(candidate, page_url):
@@ -374,7 +403,7 @@ class Daemon:
                     send({"type": kind, ("line" if kind == "log" else "pct"): payload})
             except StopIteration as stop:
                 rc = stop.value or 0
-            self.history.append({"id": app_id, "backend": backend.name,
+            self.record({"id": app_id, "backend": backend.name,
                                  "rc": rc, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
                                                                time.gmtime())})
             send({"type": "done", "ok": rc == 0, "rc": rc,
@@ -496,11 +525,78 @@ class Daemon:
                     send({"type": kind, ("line" if kind == "log" else "pct"): payload})
             except StopIteration as stop:
                 rc = stop.value or 0
-            self.history.append({"id": info.get("name") or real.name,
+            self.record({"id": info.get("name") or real.name,
                                  "backend": backend.name, "rc": rc,
                                  "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
             send({"type": "done", "ok": rc == 0, "rc": rc,
                   "reason": "installed" if rc == 0 else f"{backend.name} exited {rc}"})
+        finally:
+            self.install_lock.release()
+
+    def op_updates(self, req, peer, send):
+        """What we have installed through a package manager, and what can move.
+
+        Only covers the system side. `flatpak --user` installs belong to the
+        calling user, not to root, so the settings window asks flatpak itself
+        rather than going through here.
+        """
+        native = backends.native_backend()
+        seen, items = set(), []
+        for h in self.history:
+            name, backend = h.get("id"), h.get("backend")
+            if not name or backend == "flatpak-user" or name in seen:
+                continue
+            seen.add(name)
+            b = backends.by_name(backend) or native
+            if not b or not b.available():
+                continue
+            installed, available = b.update_info(name)
+            if not installed:
+                continue      # removed since, or never really a system package
+            items.append({
+                "name": name, "backend": b.name,
+                "installed": installed, "available": available,
+                "updatable": bool(available and available != installed),
+                # A vendor package that configured no repository has nowhere to
+                # update from. Saying so is the honest cost of preferring it.
+                "tracked": bool(available),
+            })
+        send({"type": "done", "ok": True, "items": items})
+
+    def op_update(self, req, peer, send):
+        """Update named packages we installed. Same gate as any other install."""
+        wanted = [n for n in (req.get("names") or []) if isinstance(n, str)]
+        known = {h.get("id") for h in self.history}
+        unknown = [n for n in wanted if n not in known]
+        if unknown:
+            send({"type": "done", "ok": False,
+                  "reason": f"not installed by Usual Install: {unknown}"})
+            return
+        native = backends.native_backend()
+        if not native or not wanted:
+            send({"type": "done", "ok": False, "reason": "nothing to update"})
+            return
+        allowed, why = polkit_allows(peer["pid"], peer["uid"])
+        if not allowed:
+            send({"type": "done", "ok": False, "reason": why})
+            return
+        if not self.install_lock.acquire(blocking=False):
+            send({"type": "done", "ok": False, "reason": "another install is in progress"})
+            return
+        try:
+            cmd = native.install_cmd(wanted[0])[:-1] + wanted
+            env = native.env() if hasattr(native, "env") else None
+            send({"type": "log", "line": "$ " + " ".join(cmd) + "\n"})
+            gen = backends.run_streaming(cmd, env=env)
+            rc = 0
+            try:
+                while True:
+                    kind, payload = next(gen)
+                    send({"type": kind, ("line" if kind == "log" else "pct"): payload})
+            except StopIteration as stop:
+                rc = stop.value or 0
+            send({"type": "done", "ok": rc == 0, "rc": rc,
+                  "reason": "updated" if rc == 0 else f"{native.name} exited {rc}"})
         finally:
             self.install_lock.release()
 
@@ -646,7 +742,7 @@ class Daemon:
                 send({"type": "log", "line": f"verified {chosen.name} is "
                                              f"{entry['aur_name']}\n"})
                 rc = self._stream(["pacman", "-U", "--noconfirm", "--", str(chosen)], send)
-            self.history.append({"id": entry["id"], "backend": "aur", "rc": rc,
+            self.record({"id": entry["id"], "backend": "aur", "rc": rc,
                                  "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
             send({"type": "done", "ok": rc == 0, "rc": rc,
                   "reason": "installed" if rc == 0 else f"pacman exited {rc}"})
@@ -655,6 +751,7 @@ class Daemon:
 
     OPS = {"status": op_status, "resolve": op_resolve, "install": op_install,
            "install-file": op_install_file,
+           "updates": op_updates, "update": op_update,
            "provision": op_provision, "config-get": op_config_get,
            "config-set": op_config_set, "aur-deps": op_aur_deps,
            "install-aur": op_install_aur}

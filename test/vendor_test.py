@@ -47,8 +47,29 @@ def build_deb(td, arch, homepage, name="vendortest"):
     return out if r.returncode == 0 else None
 
 
+def ranking_checks():
+    sys.path.insert(0, str(ROOT / "resolver"))
+    from resolve import rank
+    cands = [{"id": "us.zoom.Zoom", "backend": "flatpak", "verified": True},
+             {"id": "aur:zoom", "backend": "aur"},
+             {"id": "vendor:zoom.deb", "backend": "vendor"}]
+    print("\n--- which source the Install button lands on ---")
+    first = rank(cands, aur_ok=True, prefer="vendor")[0]["id"]
+    check(first.startswith("vendor:"),
+          "by default the developer's own package is offered first", first)
+    first = rank(cands, aur_ok=True, prefer="flathub")[0]["id"]
+    check(first == "us.zoom.Zoom",
+          "set to prefer Flathub, the verified build comes first", first)
+    ids = [c["id"] for c in rank(cands, aur_ok=True, prefer="vendor")]
+    check(len(ids) == 3, "every source stays available in the picker", ids)
+    ids = [c["id"] for c in rank(cands, aur_ok=False, prefer="vendor")]
+    check("aur:zoom" not in ids,
+          "AUR is dropped where it cannot be built, in either order", ids)
+
+
 def main():
     import backends
+    ranking_checks()
 
     print("\n--- architecture matching ---")
     names = backends.machine_arch_names()

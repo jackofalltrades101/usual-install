@@ -40,6 +40,8 @@ PCT = re.compile(r"(\d{1,3})\s*%")
 
 def source_label(c):
     """Where a candidate comes from, as the picker shows it."""
+    if c.get("backend") == "vendor":
+        return "The developer's own package"
     if c.get("backend") == "aur":
         return "AUR, built on this computer"
     if c.get("verified"):
@@ -103,6 +105,7 @@ class InstallerWindow(Gtk.ApplicationWindow):
     def refresh_subtitle(self):
         c = self.chosen
         is_aur = c.get("backend") == "aur"
+        is_vendor = c.get("backend") == "vendor"
         self.header.set(c["name"], c.get("summary") or "")
         self.set_title(f"{c['name']} Installer")
         self.install_btn.set_label("Build and install" if is_aur else "Install")
@@ -124,6 +127,17 @@ class InstallerWindow(Gtk.ApplicationWindow):
                 "Read the build script",
                 "https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h="
                 + c.get("pkgbase", ""))
+        elif is_vendor:
+            self.form.add("Package", os.path.basename(c.get("filePath", "")), mono=True)
+            if c.get("arch"):
+                self.form.add("Built for", c["arch"], mono=True)
+            self.form.add("Installs for",
+                          "Everyone on this computer, asks for your password")
+            self.message.show(
+                "warning",
+                f"This package comes from {self.domain or 'the website'} "
+                f"directly. Nobody else has reviewed it, and it will not update "
+                f"itself.")
         else:
             self.form.add("Package", c["id"], mono=True)
             self.form.add("Installs for", "You only, no password needed")
@@ -178,6 +192,30 @@ class InstallerWindow(Gtk.ApplicationWindow):
         except (OSError, subprocess.SubprocessError):
             return False
 
+    def run_vendor(self):
+        """Install the package the vendor served, via the daemon."""
+        path = self.chosen.get("filePath", "")
+        GLib.idle_add(self.append_log,
+                      f"installing {os.path.basename(path)} from {self.domain}\n")
+        rc = 1
+        try:
+            for msg in daemon_client.request("install-file", path=path,
+                                             domain=self.domain):
+                if msg.get("type") == "log":
+                    GLib.idle_add(self.append_log, msg.get("line", ""))
+                elif msg.get("type") == "progress":
+                    GLib.idle_add(self.set_pct, msg.get("pct", 0))
+                elif msg.get("type") == "done":
+                    rc = 0 if msg.get("ok") else 1
+                    if not msg.get("ok"):
+                        GLib.idle_add(self.append_log, f"*** {msg.get('reason')}\n")
+        except daemon_client.DaemonUnavailable:
+            GLib.idle_add(self.append_log,
+                          "*** usuald is not running, so this package cannot be "
+                          "installed for you\n")
+        GLib.idle_add(self.finish, rc == 0,
+                      None if rc == 0 else "the package was not installed")
+
     def native_fallback(self, app_id):
         """Ask usuald to install from the distro repositories instead.
 
@@ -216,6 +254,9 @@ class InstallerWindow(Gtk.ApplicationWindow):
 
     def run_install(self):
         app_id = self.chosen["id"]
+        if self.chosen.get("backend") == "vendor" and not DRY_RUN:
+            self.run_vendor()
+            return
         if self.chosen.get("backend") == "aur" and not DRY_RUN:
             self.run_aur()
             return

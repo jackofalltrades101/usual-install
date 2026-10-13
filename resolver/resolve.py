@@ -230,26 +230,40 @@ def resolve(page_url, catalogue):
     return dom_bucket, f"domain {dom}"
 
 
-def rank(candidates, aur_ok):
+def rank(candidates, aur_ok, prefer="vendor"):
     """Order candidates the way the installer should offer them; drop the unusable.
 
-    The default -- the one the Install button acts on -- is the most
-    trustworthy way to get the vendor's program onto this machine:
+    The first entry is what the Install button acts on, and every entry stays
+    in the picker so the choice is the user's.
+
+    With prefer="vendor" (the default) the package the vendor serves from its
+    own download page comes first: it is the build the developer ships and
+    tests, and it is the one the user was in the middle of downloading. Its
+    cost is real and is stated in the window -- nobody else has reviewed it,
+    and it will not update itself.
+
+    With prefer="flathub" the order is the most reviewed first instead:
 
       1. a Flathub app its developer publishes (verified)
-      2. the AUR package for the site, on machines that can build it -- often
-         what the vendor itself links to for Arch, as Mojang does
+      2. the AUR package for the site, where it can be built
       3. a community-packaged Flathub app
+      4. the vendor's own package
 
-    AUR entries are removed entirely where they cannot be built (any non-Arch
-    system), so they never surface as a choice that would fail.
+    AUR entries are removed entirely where they cannot be built, so they never
+    surface as a choice that would fail.
     """
-    def key(c):
+    def trust_key(c):
+        if c.get("backend") == "vendor":
+            return 3
         if c.get("backend") == "aur":
             return 1
         return 0 if c.get("verified") else 2
+
+    def vendor_key(c):
+        return 0 if c.get("backend") == "vendor" else 1 + trust_key(c)
+
     usable = [c for c in candidates if aur_ok or c.get("backend") != "aur"]
-    return sorted(usable, key=key)
+    return sorted(usable, key=vendor_key if prefer == "vendor" else trust_key)
 
 
 def _dedupe(entries):

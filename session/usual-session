@@ -129,6 +129,49 @@ def launch_installer(payload_obj):
         return False
 
 
+def resolve_via_daemon(page_url, catalogue, want_unavailable=False):
+    """Resolve a page, preferring the daemon's verified catalogue.
+
+    The daemon owns the system catalogue and is the only copy a user cannot
+    quietly edit. Falling back to the local one keeps the agent working on a
+    machine where usuald is not installed.
+    """
+    candidates, reason, unavailable = [], "", None
+    prefer = "vendor"
+    try:
+        done, _ = daemon_client.call("resolve", pageUrl=page_url)
+        candidates = done.get("candidates") or []
+        unavailable = done.get("unavailable")
+        prefer = done.get("prefer_source") or "vendor"
+        reason = (done.get("reason") or "") + " (usuald)"
+    except daemon_client.DaemonUnavailable:
+        candidates, reason = resolve(page_url, catalogue)
+    except Exception as e:
+        log(f"daemon resolve failed ({e!r}); using the local catalogue")
+        candidates, reason = resolve(page_url, catalogue)
+    if want_unavailable:
+        return candidates, reason, prefer, unavailable
+    return candidates, reason, prefer
+
+
+def vendor_candidate(path, backend_name):
+    """The downloaded package, described the way the installer shows a choice."""
+    info = {}
+    try:
+        sys.path.insert(0, str(HERE.parent / "daemon"))
+        import backends
+        b = backends.by_name(backend_name)
+        if b:
+            info = b.inspect_local(path) or {}
+    except Exception:
+        pass
+    return {"id": f"vendor:{pathlib.Path(path).name}",
+            "name": info.get("name") or pathlib.Path(path).name,
+            "summary": "", "backend": "vendor", "filePath": str(path),
+            "nativeBackend": backend_name, "arch": info.get("arch"),
+            "path": "", "verified": None}
+
+
 def vendor_package_backend(path):
     """Name of the backend that could install this downloaded file, if any.
 
@@ -195,15 +238,18 @@ def handle(msg, catalogue, compat):
         path = msg.get("path") or ""
         page_url = msg.get("pageUrl") or ""
 
-        # A package the vendor serves directly. For many applications this is
-        # the only thing that exists, and it is the file the user clicked.
+        # A package the vendor serves directly, offered next to whatever the
+        # catalogue knows so the choice is the user's.
         pkg = vendor_package_backend(path)
         if pkg:
-            ok = launch_installer({"mode": "vendor", "pageUrl": page_url,
-                                   "filePath": path,
-                                   "domain": host_of(page_url),
-                                   "backend": pkg})
-            log(f"vendor package {pathlib.Path(path).name} via {pkg}")
+            vendor = vendor_candidate(path, pkg)
+            others, reason, prefer = resolve_via_daemon(page_url, catalogue)
+            ordered = rank([vendor] + others, aur_ok=aur.can_build(), prefer=prefer)
+            log(f"vendor package {pathlib.Path(path).name} via {pkg}; "
+                f"{len(others)} catalogue alternative(s); prefer={prefer}")
+            ok = launch_installer({"mode": "native", "candidates": ordered,
+                                   "pageUrl": page_url,
+                                   "domain": host_of(page_url)})
             return {"action": "handled" if ok else "ignore",
                     "reason": f"vendor package ({pkg})"}
 
@@ -242,31 +288,22 @@ def handle(msg, catalogue, compat):
             f"url={download_url[:120]!r} mime={msg.get('mime')!r}")
         return {"action": "ignore", "reason": "not an installer-shaped download"}
 
-    # Prefer the daemon: it owns the system catalogue and is the only copy a
-    # user cannot quietly edit. Falling back keeps Phase 1 behaviour working on
-    # a machine where usuald is not installed.
-    candidates, reason = [], ""
-    unavailable = None
-    try:
-        done, _ = daemon_client.call("resolve", pageUrl=page_url)
-        candidates = done.get("candidates") or []
-        unavailable = done.get("unavailable")
-        reason = (done.get("reason") or "") + " (usuald)"
-    except daemon_client.DaemonUnavailable:
-        candidates, reason = resolve(page_url, catalogue)
-    except Exception as e:
-        log(f"daemon resolve failed ({e!r}); using the local catalogue")
-        candidates, reason = resolve(page_url, catalogue)
-    # AUR packages only where they can be built; best source first.
-    candidates = rank(candidates, aur_ok=aur.can_build())
+    candidates, reason, prefer, unavailable = resolve_via_daemon(
+        page_url, catalogue, want_unavailable=True)
+    # AUR packages only where they can be built; preferred source first.
+    candidates = rank(candidates, aur_ok=aur.can_build(), prefer=prefer)
     log(f"{page_url} -> {len(candidates)} candidate(s) [{reason}]")
+    # The vendor's own package is a choice in its own right, and by default the
+    # one offered first, so let the download finish whenever this is a site we
+    # recognise and a package this system can install. The file is needed
+    # either to install it or to offer it; the alternative is cancelling and
+    # asking for it again.
+    known_site = bool(unavailable) or "no catalogue entry" not in reason
+    if known_site and vendor_package_backend(filename or download_url):
+        log("vendor package available; letting the download finish")
+        return {"action": "compat", "reason": "vendor package offered"}
+
     if not candidates:
-        # Before giving up: if the vendor is serving a package this system can
-        # install, let it finish downloading and offer to install it.
-        known_site = bool(unavailable) or "no catalogue entry" not in reason
-        if known_site and vendor_package_backend(filename or download_url):
-            log(f"no catalogue candidate; will offer the vendor's own package")
-            return {"action": "compat", "reason": "vendor package offered"}
         if unavailable:
             # Say so rather than letting a download through that cannot work.
             log(f"unavailable here: {unavailable.get('why')}")
