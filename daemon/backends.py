@@ -62,6 +62,23 @@ class Backend:
     def launch_cmd(self, pkg):
         return None
 
+    # Downloaded files this backend can install directly. A vendor's own
+    # package is often the only thing that exists for an application -- Discord
+    # ships a .deb and nothing else -- and it is the file the user just clicked.
+    local_suffixes = ()
+
+    def install_local_cmd(self, path):
+        raise NotImplementedError
+
+    def inspect_local(self, path):
+        """Return {name, arch, homepage} read out of the package itself.
+
+        Used to refuse a package that cannot work here before touching it:
+        Discord's .deb is amd64 and installing it on arm64 only produces a
+        confusing failure part-way through.
+        """
+        return {}
+
     def homepage(self, pkg):
         """The homepage the DISTRO records for this package, or None.
 
@@ -106,6 +123,27 @@ class Pacman(Backend):
     def install_cmd(self, pkg):
         return ["pacman", "-S", "--noconfirm", "--needed", pkg]
 
+    local_suffixes = (".pkg.tar.zst", ".pkg.tar.xz")
+
+    def install_local_cmd(self, path):
+        return ["pacman", "-U", "--noconfirm", str(path)]
+
+    def inspect_local(self, path):
+        try:
+            out = subprocess.run(["bsdtar", "-xOf", str(path), ".PKGINFO"],
+                                 capture_output=True, text=True, timeout=30).stdout
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        info = {}
+        for line in out.splitlines():
+            if "=" not in line:
+                continue
+            k, v = (x.strip() for x in line.split("=", 1))
+            if k == "pkgname": info["name"] = v
+            elif k == "arch": info["arch"] = v
+            elif k == "url": info["homepage"] = v
+        return info
+
     def homepage(self, pkg):
         r = subprocess.run(["pacman", "-Si", pkg], capture_output=True, text=True)
         if r.returncode != 0:
@@ -134,6 +172,30 @@ class Apt(Backend):
     def env(self):
         return dict(os.environ, DEBIAN_FRONTEND="noninteractive")
 
+    local_suffixes = (".deb",)
+
+    def install_local_cmd(self, path):
+        # apt resolves the package's dependencies; dpkg -i would not.
+        return ["apt-get", "install", "-y", "--no-install-recommends", str(path)]
+
+    def inspect_local(self, path):
+        try:
+            out = subprocess.run(
+                ["dpkg-deb", "-f", str(path), "Package", "Architecture", "Homepage"],
+                capture_output=True, text=True, timeout=30).stdout
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        info = {}
+        for line in out.splitlines():
+            if ":" not in line:
+                continue
+            k, v = (x.strip() for x in line.split(":", 1))
+            kl = k.lower()
+            if kl == "package": info["name"] = v
+            elif kl == "architecture": info["arch"] = v
+            elif kl == "homepage": info["homepage"] = v
+        return info
+
     def homepage(self, pkg):
         r = subprocess.run(["apt-cache", "show", pkg], capture_output=True, text=True)
         if r.returncode != 0:
@@ -158,6 +220,26 @@ class Dnf(Backend):
         dnf = shutil.which("dnf5") or shutil.which("dnf")
         return [dnf, "install", "-y", pkg]
 
+    local_suffixes = (".rpm",)
+
+    def install_local_cmd(self, path):
+        dnf = shutil.which("dnf5") or shutil.which("dnf")
+        return [dnf, "install", "-y", str(path)]
+
+    def inspect_local(self, path):
+        try:
+            out = subprocess.run(
+                ["rpm", "-qp", "--qf", "%{NAME}\\n%{ARCH}\\n%{URL}\\n", str(path)],
+                capture_output=True, text=True, timeout=30).stdout.splitlines()
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        info = {}
+        if len(out) > 0: info["name"] = out[0].strip()
+        if len(out) > 1: info["arch"] = out[1].strip()
+        if len(out) > 2 and out[2].strip() not in ("(none)", ""):
+            info["homepage"] = out[2].strip()
+        return info
+
     def homepage(self, pkg):
         dnf = shutil.which("dnf5") or shutil.which("dnf")
         r = subprocess.run([dnf, "info", pkg], capture_output=True, text=True)
@@ -171,6 +253,42 @@ class Dnf(Backend):
                     if v.startswith("http"):
                         return v
         return None
+
+
+# What each packaging system calls "runs anywhere".
+ANY_ARCH = {"all", "noarch", "any"}
+
+
+def machine_arch_names():
+    """The names this machine answers to, across packaging systems.
+
+    dpkg says amd64 where rpm says x86_64, and a package built for the wrong
+    one installs into a broken state rather than failing cleanly.
+    """
+    uname = os.uname().machine if hasattr(os, "uname") else ""
+    names = {uname}
+    try:
+        dpkg = subprocess.run(["dpkg", "--print-architecture"],
+                              capture_output=True, text=True, timeout=10)
+        if dpkg.returncode == 0:
+            names.add(dpkg.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    equivalents = {"x86_64": "amd64", "amd64": "x86_64",
+                   "aarch64": "arm64", "arm64": "aarch64",
+                   "armv7l": "armhf", "armhf": "armv7l"}
+    for n in list(names):
+        if n in equivalents:
+            names.add(equivalents[n])
+    return {n for n in names if n}
+
+
+def arch_ok(pkg_arch):
+    """True when a package of this architecture can run on this machine."""
+    a = (pkg_arch or "").strip().lower()
+    if not a:
+        return False          # unknown is not the same as fine
+    return a in ANY_ARCH or a in machine_arch_names()
 
 
 ALL = [FlatpakUser(), Pacman(), Apt(), Dnf()]

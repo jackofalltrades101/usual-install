@@ -423,6 +423,119 @@ class CompatWindow(Gtk.ApplicationWindow):
         self.cancel_btn.set_label("Close")
 
 
+class VendorWindow(Gtk.ApplicationWindow):
+    """Install the package the vendor served, instead of leaving it in Downloads.
+
+    For a great many applications this is the only thing that exists: no
+    Flathub build, nothing in the distribution's repositories, just a .deb or
+    .rpm on the vendor's own download page. Leaving it sitting in Downloads is
+    the behaviour this tool was written to replace.
+    """
+
+    def __init__(self, app, file_path, domain, backend_name, page_url=""):
+        self.file_path = file_path
+        self.domain = domain
+        self.backend_name = backend_name
+        info = {}
+        try:
+            sys.path.insert(0, str(_ROOT / "daemon"))
+            import backends
+            b = backends.by_name(backend_name)
+            if b:
+                info = b.inspect_local(file_path) or {}
+        except Exception:
+            pass
+        self.info = info
+        name = info.get("name") or os.path.basename(file_path)
+
+        super().__init__(application=app, title=f"{name} Installer")
+        header_box, body, footer = style.shell(self)
+        header = style.Header(header_box, icon_name="package-x-generic")
+        header.set(name, f"Package from {domain}" if domain else "Downloaded package")
+
+        form = style.Form()
+        form.add("Source", f"{domain or 'the download'}, the developer's own package")
+        form.add("Package", os.path.basename(file_path), mono=True)
+        if info.get("arch"):
+            form.add("Built for", info["arch"], mono=True)
+        form.add("Installs for", "Everyone on this computer, asks for your password")
+        body.append(form.grid)
+
+        # The developer's own package has not been through anyone else's
+        # review. That is worth saying plainly, the same way the Flathub window
+        # distinguishes a verified publisher from a community upload.
+        self.message = style.Message()
+        self.message.show("warning",
+                          f"This package comes from {domain or 'the website'} "
+                          f"directly. Nobody else has reviewed it.")
+        body.append(self.message.box)
+
+        self.progress = Gtk.ProgressBar(show_text=True)
+        self.progress.set_visible(False)
+        body.append(self.progress)
+        self.details, self.log_scroll, self.log_view = style.log_view()
+        body.append(self.details)
+
+        footer.append(style.spacer())
+        self.cancel_btn = Gtk.Button(label="Cancel")
+        self.cancel_btn.connect("clicked", lambda *_: self.close())
+        self.install_btn = Gtk.Button(label="Install")
+        self.install_btn.add_css_class("suggested-action")
+        self.install_btn.connect("clicked", self.on_install)
+        footer.append(self.cancel_btn); footer.append(self.install_btn)
+        self.set_default_widget(self.install_btn)
+        self.install_btn.grab_focus()
+
+    def append_log(self, text):
+        buf = self.log_view.get_buffer()
+        buf.insert(buf.get_end_iter(), text)
+        adj = self.log_scroll.get_vadjustment()
+        adj.set_value(adj.get_upper())
+
+    def on_install(self, _btn):
+        self.install_btn.set_sensitive(False)
+        self.progress.set_visible(True)
+        self.progress.set_text("Installing…")
+        self.details.set_expanded(True)
+        threading.Thread(target=self.work, daemon=True).start()
+
+    def work(self):
+        rc = 1
+        try:
+            for msg in daemon_client.request("install-file", path=self.file_path,
+                                             domain=self.domain):
+                if msg.get("type") == "log":
+                    GLib.idle_add(self.append_log, msg.get("line", ""))
+                elif msg.get("type") == "progress":
+                    GLib.idle_add(self.progress.set_fraction,
+                                  min(msg.get("pct", 0), 100) / 100)
+                elif msg.get("type") == "done":
+                    rc = 0 if msg.get("ok") else 1
+                    if not msg.get("ok"):
+                        GLib.idle_add(self.append_log, f"*** {msg.get('reason')}\n")
+        except daemon_client.DaemonUnavailable:
+            GLib.idle_add(self.append_log,
+                          "*** usuald is not running, so this package cannot be "
+                          "installed for you\n")
+        GLib.idle_add(self.finish, rc)
+
+    def finish(self, rc):
+        if rc == 0:
+            self.progress.set_fraction(1.0)
+            self.progress.set_text("Installed")
+            self.message.show("positive", "Installed.")
+            self.install_btn.set_label("Done")
+            self.install_btn.set_sensitive(True)
+            self.install_btn.disconnect_by_func(self.on_install)
+            self.install_btn.connect("clicked", lambda *_: self.close())
+        else:
+            self.progress.set_text("Failed")
+            self.message.show("negative", "The package was not installed. "
+                                          "The details below show what happened.")
+            self.details.set_expanded(True)
+        self.cancel_btn.set_label("Close")
+
+
 class UnsupportedWindow(Gtk.ApplicationWindow):
     """We know what this is, and it will not run acceptably. Say so."""
 
@@ -475,6 +588,9 @@ class InstallerApp(Gtk.Application):
             c = d["compat"]
             CompatWindow(self, c["entry"], c["plan"], d.get("exePath", ""),
                          c.get("reason", "")).present()
+        elif mode == "vendor":
+            VendorWindow(self, d["filePath"], d.get("domain", ""),
+                         d.get("backend", ""), d.get("pageUrl", "")).present()
         elif mode == "unsupported":
             c = d["compat"]
             UnsupportedWindow(self, c["entry"], c.get("reason", ""),
@@ -493,6 +609,9 @@ def main():
     mode = data.get("mode", "native")
     if mode == "native" and not data.get("candidates"):
         sys.stderr.write("no candidates\n")
+        return 2
+    if mode == "vendor" and not data.get("filePath"):
+        sys.stderr.write("no file to install\n")
         return 2
     if mode in ("compat", "unsupported") and not data.get("compat"):
         sys.stderr.write("no compat payload\n")

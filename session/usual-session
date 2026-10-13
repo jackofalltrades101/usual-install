@@ -129,6 +129,26 @@ def launch_installer(payload_obj):
         return False
 
 
+def vendor_package_backend(path):
+    """Name of the backend that could install this downloaded file, if any.
+
+    Only the format this distribution actually uses: a .deb is of no use on
+    Fedora, and offering to install one would be worse than silence.
+    """
+    try:
+        sys.path.insert(0, str(HERE.parent / "daemon"))
+        import backends
+    except Exception:
+        return None
+    name = str(path).lower()
+    for b in backends.ALL:
+        if not (b.needs_privilege and b.available()):
+            continue
+        if any(name.endswith(sfx) for sfx in getattr(b, "local_suffixes", ())):
+            return b.name
+    return None
+
+
 def host_of(url):
     try:
         from urllib.parse import urlparse
@@ -170,9 +190,23 @@ def decide_compat(msg, compat):
 def handle(msg, catalogue, compat):
     kind = msg.get("type")
 
-    # Second phase of the compatibility path: the .exe has finished downloading.
+    # Second phase for anything we needed on disk before we could act.
     if kind == "downloaded":
         path = msg.get("path") or ""
+        page_url = msg.get("pageUrl") or ""
+
+        # A package the vendor serves directly. For many applications this is
+        # the only thing that exists, and it is the file the user clicked.
+        pkg = vendor_package_backend(path)
+        if pkg:
+            ok = launch_installer({"mode": "vendor", "pageUrl": page_url,
+                                   "filePath": path,
+                                   "domain": host_of(page_url),
+                                   "backend": pkg})
+            log(f"vendor package {pathlib.Path(path).name} via {pkg}")
+            return {"action": "handled" if ok else "ignore",
+                    "reason": f"vendor package ({pkg})"}
+
         entry, why = compat_match(compat,
                                   page_title=msg.get("pageTitle") or "",
                                   filename=pathlib.Path(path).name,
@@ -227,6 +261,12 @@ def handle(msg, catalogue, compat):
     candidates = rank(candidates, aur_ok=aur.can_build())
     log(f"{page_url} -> {len(candidates)} candidate(s) [{reason}]")
     if not candidates:
+        # Before giving up: if the vendor is serving a package this system can
+        # install, let it finish downloading and offer to install it.
+        known_site = bool(unavailable) or "no catalogue entry" not in reason
+        if known_site and vendor_package_backend(filename or download_url):
+            log(f"no catalogue candidate; will offer the vendor's own package")
+            return {"action": "compat", "reason": "vendor package offered"}
         if unavailable:
             # Say so rather than letting a download through that cannot work.
             log(f"unavailable here: {unavailable.get('why')}")

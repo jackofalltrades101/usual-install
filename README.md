@@ -22,6 +22,10 @@ you install later are picked up on their own.
   builds too, set up when you install it.
 - **No password for most installs.** Flathub applications install into your own
   user account. Only distro packages ask, and only once per session.
+- **The developer's own package, when that is all there is.** Plenty of
+  applications are on no repository at all — Discord publishes a `.deb` and
+  nothing else. Usual Install installs that package for you instead of leaving
+  it in your Downloads folder, checking first that it is built for your machine.
 - **About 3,400 applications**, built from the metadata vendors already publish.
   Nothing is hand-maintained, so it does not go stale the moment someone stops
   updating a list.
@@ -45,6 +49,11 @@ installs software because of a web page you visited.
 - The catalogue is signed, and one that fails verification is not used at all.
 - The window says who published what you are installing: the developer, or a
   community packager.
+- A package the vendor serves directly is only offered for a site the catalogue
+  already knows, must be a format your distribution actually installs, and must
+  be built for your architecture. Discord's `.deb` is `amd64`; on an ARM machine
+  it is refused rather than half-installed.
+- If such a package names a homepage, it has to be the site you were on.
 - Nothing installs without you clicking **Install**.
 
 ## The AUR, handled for you
@@ -75,6 +84,21 @@ comes next, ahead of community-packaged Flathub apps.
 ![Installing Minecraft from the AUR](docs/img/installer-aur.png)
 
 ![Compatibility window](docs/img/compat.png)
+
+## Where applications come from
+
+In order, stopping at the first that works on your machine:
+
+| Source | Needs a password | Notes |
+|---|---|---|
+| Flathub | no | installs into your own account, sandboxed |
+| Your distribution's repositories | once per session | checked against the vendor's own domain |
+| The AUR | once per session | Arch only, and only above a vote threshold |
+| **The developer's own package** | once per session | `.deb`, `.rpm`, `.pkg.tar.zst` — what you clicked |
+
+The last is the fallback for everything that exists nowhere else. It is
+deliberately last: nobody but the developer has reviewed it, and the window
+says so before you install.
 
 ## Installing
 

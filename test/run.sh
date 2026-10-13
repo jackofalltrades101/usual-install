@@ -69,14 +69,19 @@ python3 daemon/aur.py --self-test >$LOGDIR/aur.log 2>&1 && ok "AUR checks" || { 
 python3 test/compat_setup_test.py >$LOGDIR/csetup.log 2>&1 && ok "setup orchestration (stub runners, real subprocesses)" || { bad "setup orchestration"; tail -20 $LOGDIR/csetup.log; }
 printf '   this machine: '; python3 compat/runners.py | tr '\n' ' ' | sed 's/this machine: //'; echo
 
-step "tier 1g — catalogue updates"
+step "tier 1g — vendor packages"
+python3 test/vendor_test.py >$LOGDIR/vendor.log 2>&1 \
+  && ok "vendor packages: architecture and origin checked before installing" \
+  || { bad "vendor packages"; tail -20 $LOGDIR/vendor.log; }
+
+step "tier 1h — catalogue updates"
 python3 test/update_test.py >$LOGDIR/update.log 2>&1 && ok "updates verify, never downgrade, never clobber a good catalogue" || { bad "catalogue updates"; tail -20 $LOGDIR/update.log; }
 
-step "tier 1h — usuald"
+step "tier 1i — usuald"
 python3 test/daemon_test.py >$LOGDIR/daemon.log 2>&1 && ok "daemon: privileged surface refuses what it should" || { bad "usuald"; tail -25 $LOGDIR/daemon.log; }
 python3 daemon/backends.py | sed 's/^/   /'
 
-step "tier 1i — packaging"
+step "tier 1j — packaging"
 if command -v make >/dev/null 2>&1; then
   bash test/install_test.sh >$LOGDIR/installtest.log 2>&1 \
     && ok "staged install runs from its own layout ($(grep -cE 'pass' $LOGDIR/installtest.log) checks)" \
@@ -85,7 +90,7 @@ else
   skip "make not installed; packaging test skipped"
 fi
 
-step "tier 1j — distro packages actually build"
+step "tier 1k — distro packages actually build"
 if command -v rpmbuild >/dev/null 2>&1 || command -v makepkg >/dev/null 2>&1; then
   bash test/package_build_test.sh >$LOGDIR/pkgbuild.log 2>&1 \
     && ok "distro package builds and ships no private key" \
@@ -94,7 +99,7 @@ else
   skip "no rpmbuild or makepkg here (the .deb path is covered by install_test)"
 fi
 
-step "tier 1k — polkit authorisation"
+step "tier 1l — polkit authorisation"
 if [ "$(id -u)" -eq 0 ]; then
   skip "polkit is bypassed for root; run the suite as a normal user to cover it"
 elif command -v pkcheck >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
@@ -105,7 +110,7 @@ else
   skip "needs polkit and passwordless sudo"
 fi
 
-step "tier 1l — provisioning"
+step "tier 1m — provisioning"
 python3 provision/provision.py keygen >$LOGDIR/keygen.log 2>&1 && ok "keygen ($(cat sensor/extension-id 2>/dev/null))" || { bad "keygen"; cat $LOGDIR/keygen.log; }
 python3 provision/provision.py install >$LOGDIR/prov.log 2>&1 && ok "native host manifests written" || skip "no browsers detected"
 python3 provision/provision.py status

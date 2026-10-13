@@ -18,7 +18,7 @@ session agent still cannot install something the catalogue does not list.
     sudo ./usuald.py --foreground          # run it
     ./usuald.py --self-test                # no root needed
 """
-import argparse, json, os, pathlib, shutil, socket, struct, subprocess, sys, threading, time
+import argparse, json, os, pathlib, shutil, socket, stat, struct, subprocess, sys, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -399,6 +399,111 @@ class Daemon:
             return b
         return None
 
+    def op_install_file(self, req, peer, send):
+        """Install a package the vendor served directly.
+
+        For a great many applications the vendor's own .deb or .rpm is the only
+        thing that exists -- Discord publishes no Flathub build and is in no
+        distribution's repositories -- and it is precisely the file the user
+        just clicked. Installing it is what the tool is for; leaving it in
+        Downloads is the behaviour we set out to replace.
+
+        This is the least constrained thing the daemon does, so it is fenced:
+        the file must belong to the caller, be a package format this system
+        actually uses, be built for this architecture, and be authorised
+        through polkit like any other privileged install.
+        """
+        raw = req.get("path") or ""
+        domain = (req.get("domain") or "").lower()
+        path = pathlib.Path(raw)
+
+        try:
+            real = path.resolve(strict=True)
+        except OSError:
+            send({"type": "done", "ok": False, "reason": f"no such file: {raw}"})
+            return
+        try:
+            st = real.lstat()
+        except OSError as e:
+            send({"type": "done", "ok": False, "reason": str(e)})
+            return
+        if not stat.S_ISREG(st.st_mode):
+            send({"type": "done", "ok": False, "reason": "not a regular file"})
+            return
+        # The caller must own what it is asking us to install, so one user
+        # cannot talk the daemon into installing another user's file.
+        if peer["uid"] not in (0, st.st_uid):
+            send({"type": "done", "ok": False,
+                  "reason": "that file does not belong to you"})
+            return
+
+        backend = next((b for b in backends.ALL
+                        if b.needs_privilege and b.available()
+                        and any(str(real).lower().endswith(sfx)
+                                for sfx in b.local_suffixes)), None)
+        if not backend:
+            send({"type": "done", "ok": False,
+                  "reason": f"{real.name} is not a package format "
+                            f"{backends.distro_family()} installs"})
+            return
+
+        info = backend.inspect_local(real)
+        if not info:
+            send({"type": "done", "ok": False,
+                  "reason": f"{real.name} is not a readable {backend.name} package"})
+            return
+        if not backends.arch_ok(info.get("arch")):
+            send({"type": "done", "ok": False,
+                  "reason": f"{real.name} is built for {info.get('arch')}, "
+                            f"and this machine is {MACHINE_ARCH}"})
+            return
+
+        declared = info.get("homepage")
+        if declared and domain:
+            from urllib.parse import urlparse
+            got = registrable(urlparse(declared).hostname or "")
+            if got and got != registrable(domain):
+                send({"type": "done", "ok": False,
+                      "reason": f"refusing {info.get('name')}: it declares "
+                                f"{got!r}, not {registrable(domain)!r}"})
+                return
+            send({"type": "log",
+                  "line": f"{info.get('name')} declares {declared} — matches "
+                          f"{registrable(domain)}\n"})
+        else:
+            send({"type": "log",
+                  "line": f"{info.get('name')} declares no homepage; trusting "
+                          f"{domain or 'the download'} it came from\n"})
+
+        allowed, why = polkit_allows(peer["pid"], peer["uid"])
+        if not allowed:
+            send({"type": "done", "ok": False, "reason": why})
+            return
+        send({"type": "log", "line": f"authorized: {why}\n"})
+
+        if not self.install_lock.acquire(blocking=False):
+            send({"type": "done", "ok": False, "reason": "another install is in progress"})
+            return
+        try:
+            cmd = backend.install_local_cmd(real)
+            env = backend.env() if hasattr(backend, "env") else None
+            send({"type": "log", "line": "$ " + " ".join(cmd) + "\n"})
+            gen = backends.run_streaming(cmd, env=env)
+            rc = 0
+            try:
+                while True:
+                    kind, payload = next(gen)
+                    send({"type": kind, ("line" if kind == "log" else "pct"): payload})
+            except StopIteration as stop:
+                rc = stop.value or 0
+            self.history.append({"id": info.get("name") or real.name,
+                                 "backend": backend.name, "rc": rc,
+                                 "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+            send({"type": "done", "ok": rc == 0, "rc": rc,
+                  "reason": "installed" if rc == 0 else f"{backend.name} exited {rc}"})
+        finally:
+            self.install_lock.release()
+
     def op_provision(self, req, peer, send):
         n = self.provision_once(force=True)
         send({"type": "done", "ok": True, "reason": f"provisioned {n} location(s)"})
@@ -549,6 +654,7 @@ class Daemon:
             self.install_lock.release()
 
     OPS = {"status": op_status, "resolve": op_resolve, "install": op_install,
+           "install-file": op_install_file,
            "provision": op_provision, "config-get": op_config_get,
            "config-set": op_config_set, "aur-deps": op_aur_deps,
            "install-aur": op_install_aur}
