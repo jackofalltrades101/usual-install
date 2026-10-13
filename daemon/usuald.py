@@ -42,8 +42,16 @@ RUN_DIR = pathlib.Path(os.environ.get("USUAL_RUN_DIR", "/run/usual-install"))
 SOCKET_PATH = RUN_DIR / "usuald.sock"
 CONFIG_PATH = pathlib.Path(os.environ.get("USUAL_CONFIG", "/etc/usual-install/config.json"))
 DATA_DIR = pathlib.Path(os.environ.get("USUAL_DATA_DIR", "/var/lib/usual-install"))
+MACHINE_ARCH = os.uname().machine if hasattr(os, "uname") else "x86_64"
+
+# Flathub publishes a separate application set per architecture, and they are
+# not the same: Zoom, Slack and Spotify have no aarch64 build at all. Shipping
+# one x86_64 catalogue everywhere means an ARM user is offered applications
+# that cannot be installed, and the failure reads as a broken tool.
 CATALOGUE_PATHS = [
     os.environ.get("USUAL_CATALOGUE"),
+    str(DATA_DIR / f"catalogue-{MACHINE_ARCH}.json"),
+    f"/usr/share/usual-install/catalogue-{MACHINE_ARCH}.json",
     str(DATA_DIR / "catalogue.json"),
     "/usr/share/usual-install/catalogue.json",
     str(HERE.parent / "catalogue" / "catalogue.json"),
@@ -114,7 +122,13 @@ class Catalogue:
                 continue
             self.data, self.path, self.verified = data, path, ok
             self.mtime = path.stat().st_mtime
-            log(f"catalogue {path} verified={ok} hosts={len(data.get('hosts', {}))}")
+            built_for = (data.get("source") or {}).get("arch")
+            log(f"catalogue {path} verified={ok} hosts={len(data.get('hosts', {}))}"
+                + (f" arch={built_for}" if built_for else ""))
+            if built_for and built_for != MACHINE_ARCH:
+                log(f"WARNING: this catalogue was built for {built_for} but this "
+                    f"machine is {MACHINE_ARCH}. Applications it lists may have no "
+                    f"build for this architecture and will fail to install.")
             return True
         log("no usable catalogue; every request will resolve to nothing")
         return False
@@ -218,12 +232,37 @@ class Daemon:
                 send({"type": "done", "ok": False, "reason": f"{d} is on the ignore list"})
                 return
         candidates, reason = resolve(url, self.catalogue.data)
+        candidates = self.usable_here(candidates)
         send({"type": "done", "ok": bool(candidates),
               "candidates": candidates, "reason": reason})
+
+    def usable_here(self, candidates):
+        """Drop candidates this machine could never install.
+
+        The catalogue is shared across distributions, so it lists AUR packages
+        that only mean anything on Arch. Offering one on Debian produces a
+        window for something that cannot possibly install, which is worse than
+        offering nothing at all.
+        """
+        if backends.distro_family() == "arch":
+            return candidates
+        kept = [c for c in candidates
+                if not (str(c.get("id", "")).startswith("aur:")
+                        or c.get("backend") == "aur")]
+        dropped = len(candidates) - len(kept)
+        if dropped:
+            log(f"dropped {dropped} AUR candidate(s): not usable on "
+                f"{backends.distro_family()}")
+        return kept
 
     def op_install(self, req, peer, send):
         """Install a catalogue entry. The client never names a package."""
         app_id = req.get("id") or ""
+        if (app_id.startswith("aur:") and backends.distro_family() != "arch"):
+            send({"type": "done", "ok": False,
+                  "reason": f"AUR packages are only usable on Arch; this is "
+                            f"{backends.distro_family()}"})
+            return
         entry = self.catalogue.entry_for(app_id)
         if not entry:
             send({"type": "done", "ok": False,

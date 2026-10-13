@@ -22,6 +22,9 @@ SYSCONFDIR  ?= /etc
 
 MODULES = daemon resolver catalogue compat provision session settings sensor
 SIGNING_KEY ?= keys/catalogue-signing.key
+# Flathub's application set differs per architecture, so build for this machine
+# unless told otherwise.
+CATALOGUE_ARCH ?= $(shell uname -m)
 
 .PHONY: all catalogue crx check install uninstall clean
 
@@ -38,7 +41,8 @@ $(SIGNING_KEY):
 	python3 catalogue/sign.py keygen --key $(SIGNING_KEY)
 
 catalogue: $(SIGNING_KEY)
-	python3 catalogue/build_catalogue.py -o catalogue/catalogue.json --sign-key $(SIGNING_KEY)
+	python3 catalogue/build_catalogue.py -o catalogue/catalogue.json \
+	        --arch $(CATALOGUE_ARCH) --sign-key $(SIGNING_KEY)
 	python3 compat/build_compat.py -o compat/compat.json
 	python3 catalogue/sign.py sign compat/compat.json --key $(SIGNING_KEY)
 	python3 catalogue/sign.py verify catalogue/catalogue.json
@@ -89,6 +93,9 @@ install:
 	install -d $(DESTDIR)$(DATADIR)
 	-install -m 0644 catalogue/catalogue.json     $(DESTDIR)$(DATADIR)/
 	-install -m 0644 catalogue/catalogue.json.sig $(DESTDIR)$(DATADIR)/
+	@# Per-architecture catalogues, when the release built them. usuald
+	@# prefers the one matching the machine it is running on.
+	-for f in catalogue/catalogue-*.json catalogue/catalogue-*.json.sig; do 	  [ -e "$$f" ] && install -m 0644 "$$f" $(DESTDIR)$(DATADIR)/ || true; 	done
 	-install -m 0644 compat/compat.json           $(DESTDIR)$(DATADIR)/
 	-install -m 0644 compat/compat.json.sig       $(DESTDIR)$(DATADIR)/
 	-install -m 0644 sensor.crx                   $(DESTDIR)$(DATADIR)/

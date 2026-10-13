@@ -163,6 +163,21 @@ class InstallerWindow(Gtk.ApplicationWindow):
         self.details.set_visible(True)
         threading.Thread(target=self.run_install, daemon=True).start()
 
+    def unavailable_for_this_arch(self, app_id):
+        """True when Flathub simply has no build of this app for this machine.
+
+        Worth checking before blaming anything else: Flathub's application set
+        differs per architecture, and Zoom, Slack and Spotify have no aarch64
+        build at all. Without this the user is told the package "is not in the
+        apt repositories", which is true and completely beside the point.
+        """
+        try:
+            r = subprocess.run(["flatpak", "--user", "remote-info", "flathub", app_id],
+                               capture_output=True, timeout=30)
+            return r.returncode != 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
     def native_fallback(self, app_id):
         """Ask usuald to install from the distro repositories instead.
 
@@ -174,6 +189,11 @@ class InstallerWindow(Gtk.ApplicationWindow):
         GLib.idle_add(self.append_log,
                       "\nFlathub did not work here; asking usuald for a "
                       "native package\n")
+        if self.unavailable_for_this_arch(app_id):
+            GLib.idle_add(
+                self.append_log,
+                f"note: Flathub has no {os.uname().machine} build of {app_id}. "
+                f"This application is not published for this architecture.\n")
         try:
             rc = 1
             for msg in daemon_client.request("install", id=app_id,

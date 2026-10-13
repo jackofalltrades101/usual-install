@@ -98,9 +98,22 @@ jobs:
             echo "::error::Every installed browser would see a different extension. Use the original keys/sensor.pem."
             exit 1; }
 
-      - name: Build and sign the catalogue
+      - name: Build and sign the catalogue for every architecture we ship to
         if: steps.keys.outputs.mode != 'none'
-        run: make catalogue
+        run: |
+          # Flathub publishes a different application set per architecture:
+          # Zoom, Slack and Spotify have no aarch64 build at all. One x86_64
+          # catalogue shipped everywhere offers ARM users applications that
+          # cannot be installed, and the failure looks like a broken tool.
+          make catalogue CATALOGUE_ARCH=x86_64
+          cp catalogue/catalogue.json     catalogue/catalogue-x86_64.json
+          cp catalogue/catalogue.json.sig catalogue/catalogue-x86_64.json.sig
+          python3 catalogue/build_catalogue.py -o catalogue/catalogue-aarch64.json \
+                  --arch aarch64 --sign-key "$SIGNING_KEY"
+          python3 catalogue/sign.py verify catalogue/catalogue-aarch64.json
+          ls -la catalogue/catalogue-*.json
+        env:
+          SIGNING_KEY: keys/catalogue-signing.key
 
       - name: Pack the browser component
         if: steps.ver.outputs.is_release == 'true'
@@ -139,6 +152,8 @@ jobs:
               --notes "The signed application catalogue. Rebuilt weekly; installs fetch it from here."
           gh release upload "$CATALOGUE_TAG" --clobber \
             catalogue/catalogue.json catalogue/catalogue.json.sig \
+            catalogue/catalogue-x86_64.json catalogue/catalogue-x86_64.json.sig \
+            catalogue/catalogue-aarch64.json catalogue/catalogue-aarch64.json.sig \
             compat/compat.json compat/compat.json.sig
 
       - name: Hand the prepared tree to the package jobs
