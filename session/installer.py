@@ -426,16 +426,27 @@ class CompatWindow(Gtk.ApplicationWindow):
 class UnsupportedWindow(Gtk.ApplicationWindow):
     """We know what this is, and it will not run acceptably. Say so."""
 
-    def __init__(self, app, entry, reason):
+    def __init__(self, app, entry, reason, kind="windows"):
         super().__init__(application=app, title=f"{entry['name']}: not supported")
         header_box, body, footer = style.shell(self, width=470)
         header = style.Header(header_box, icon_name="dialog-information")
-        header.set(entry["name"], "Windows application")
 
-        m = style.Message()
-        m.show("negative", f"{entry['name']} has no Linux version, and the Windows "
-                           f"version does not run well enough on this computer to "
-                           f"offer it.")
+        # Two different situations end up here and they need different words.
+        # A Linux application that simply is not packaged for this machine is
+        # not "a Windows application", and saying so is both wrong and
+        # confusing: Discord has a perfectly good Linux build, just not one
+        # for this architecture.
+        if kind == "unavailable":
+            header.set(entry["name"], "Not available for this system")
+            m = style.Message()
+            m.show("negative", f"{entry['name']} is not packaged for this "
+                               f"computer, so there is nothing to install.")
+        else:
+            header.set(entry["name"], "Windows application")
+            m = style.Message()
+            m.show("negative", f"{entry['name']} has no Linux version, and the "
+                               f"Windows version does not run well enough on this "
+                               f"computer to offer it.")
         body.append(m.box)
         why = Gtk.Label(xalign=0, wrap=True, max_width_chars=56, label=reason)
         why.add_css_class("summary")
@@ -466,7 +477,8 @@ class InstallerApp(Gtk.Application):
                          c.get("reason", "")).present()
         elif mode == "unsupported":
             c = d["compat"]
-            UnsupportedWindow(self, c["entry"], c.get("reason", "")).present()
+            UnsupportedWindow(self, c["entry"], c.get("reason", ""),
+                              c.get("kind", "windows")).present()
         else:
             InstallerWindow(self, d["candidates"], d.get("pageUrl", ""),
                             d.get("domain", "")).present()

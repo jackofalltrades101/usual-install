@@ -232,9 +232,42 @@ class Daemon:
                 send({"type": "done", "ok": False, "reason": f"{d} is on the ignore list"})
                 return
         candidates, reason = resolve(url, self.catalogue.data)
-        candidates = self.usable_here(candidates)
-        send({"type": "done", "ok": bool(candidates),
-              "candidates": candidates, "reason": reason})
+        usable, dropped = self.usable_here(candidates)
+        if not usable and dropped:
+            # We know this application and we know it cannot be installed here.
+            # Staying silent would leave the user downloading a package that
+            # will not install either -- Discord's own .deb is amd64 only, so
+            # on arm64 the download is useless and nothing says so.
+            name = self.display_name(dropped[0], url)
+            send({"type": "done", "ok": False, "candidates": [],
+                  "reason": reason,
+                  "unavailable": {
+                      "name": name,
+                      "why": f"{name} is only packaged for Arch Linux. There is no "
+                             f"{backends.distro_family()} package and no "
+                             f"{MACHINE_ARCH} build on Flathub."}})
+            return
+        send({"type": "done", "ok": bool(usable),
+              "candidates": usable, "reason": reason})
+
+    @staticmethod
+    def display_name(candidate, page_url):
+        """A name worth showing a person.
+
+        AUR entries carry packaging names like `discord_arch_electron`, which
+        is not what the user came looking for. The site they are on is a better
+        answer, so fall back to its domain label when the candidate name looks
+        like a package rather than a product.
+        """
+        name = (candidate.get("name") or "").strip()
+        looks_like_a_package = (not name) or any(ch in name for ch in "_-") \
+            or name.islower()
+        if looks_like_a_package:
+            from urllib.parse import urlparse
+            label = registrable(urlparse(page_url).hostname or "").split(".")[0]
+            if label:
+                return label[:1].upper() + label[1:]
+        return name or candidate.get("id", "This application")
 
     def usable_here(self, candidates):
         """Drop candidates this machine could never install.
@@ -245,15 +278,17 @@ class Daemon:
         offering nothing at all.
         """
         if backends.distro_family() == "arch":
-            return candidates
-        kept = [c for c in candidates
-                if not (str(c.get("id", "")).startswith("aur:")
-                        or c.get("backend") == "aur")]
-        dropped = len(candidates) - len(kept)
+            return candidates, []
+        kept, dropped = [], []
+        for c in candidates:
+            if str(c.get("id", "")).startswith("aur:") or c.get("backend") == "aur":
+                dropped.append(c)
+            else:
+                kept.append(c)
         if dropped:
-            log(f"dropped {dropped} AUR candidate(s): not usable on "
+            log(f"dropped {len(dropped)} AUR candidate(s): not usable on "
                 f"{backends.distro_family()}")
-        return kept
+        return kept, dropped
 
     def op_install(self, req, peer, send):
         """Install a catalogue entry. The client never names a package."""

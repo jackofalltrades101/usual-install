@@ -195,19 +195,28 @@ def handle(msg, catalogue, compat):
     download_url = msg.get("downloadUrl") or ""
 
     # A Windows installer means there is no Linux build on this page.
-    if looks_windows(filename, download_url):
+    mime = msg.get("mime") or ""
+    if looks_windows(filename, download_url, mime):
         return decide_compat(msg, compat)
 
-    if not looks_installable(filename, download_url):
+    if not looks_installable(filename, download_url, mime):
+        # Log what we actually saw. A download that is quietly ignored is
+        # indistinguishable from the tool being broken, and vendors commonly
+        # serve through a redirect endpoint (/api/download?format=deb) whose
+        # URL carries no file extension at all.
+        log(f"ignored: not installer-shaped  filename={filename!r} "
+            f"url={download_url[:120]!r} mime={msg.get('mime')!r}")
         return {"action": "ignore", "reason": "not an installer-shaped download"}
 
     # Prefer the daemon: it owns the system catalogue and is the only copy a
     # user cannot quietly edit. Falling back keeps Phase 1 behaviour working on
     # a machine where usuald is not installed.
     candidates, reason = [], ""
+    unavailable = None
     try:
         done, _ = daemon_client.call("resolve", pageUrl=page_url)
         candidates = done.get("candidates") or []
+        unavailable = done.get("unavailable")
         reason = (done.get("reason") or "") + " (usuald)"
     except daemon_client.DaemonUnavailable:
         candidates, reason = resolve(page_url, catalogue)
@@ -218,6 +227,15 @@ def handle(msg, catalogue, compat):
     candidates = rank(candidates, aur_ok=aur.can_build())
     log(f"{page_url} -> {len(candidates)} candidate(s) [{reason}]")
     if not candidates:
+        if unavailable:
+            # Say so rather than letting a download through that cannot work.
+            log(f"unavailable here: {unavailable.get('why')}")
+            launch_installer({"mode": "unsupported", "pageUrl": page_url,
+                              "compat": {"entry": {"name": unavailable.get("name"),
+                                                   "slug": "", "grade": "",
+                                                   "category": "software"},
+                                         "kind": "unavailable",
+                                         "reason": unavailable.get("why")}})
         return {"action": "ignore", "reason": reason}
 
     if not launch_installer({"mode": "native", "candidates": candidates,

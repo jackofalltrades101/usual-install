@@ -50,6 +50,31 @@ INSTALLER_SUFFIXES = (
 # is the trigger for the compatibility-layer path, never for a native install.
 WINDOWS_SUFFIXES = (".exe", ".msi")
 
+# Vendors commonly serve downloads through a redirect endpoint whose URL has no
+# file extension at all -- discord.com/api/download?platform=linux&format=deb is
+# typical -- and at the moment a download appears the browser has not yet picked
+# a filename. The content type is known immediately and is unambiguous, so match
+# on it too. Only specific installer types are listed: octet-stream and gzip
+# would match half the web.
+INSTALLER_MIMES = frozenset({
+    "application/vnd.debian.binary-package",
+    "application/x-debian-package",
+    "application/x-deb",
+    "application/x-rpm",
+    "application/x-redhat-package-manager",
+    "application/vnd.flatpak",
+    "application/vnd.flatpak.ref",
+    "application/vnd.appimage",
+    "application/x-appimage",
+    "application/vnd.archlinux.pkg.tar.zst",
+})
+WINDOWS_MIMES = frozenset({
+    "application/x-msdownload",
+    "application/x-msdos-program",
+    "application/x-msi",
+    "application/vnd.microsoft.portable-executable",
+})
+
 
 def registrable(host):
     host = host.lower().lstrip(".")
@@ -79,8 +104,10 @@ def norm_path(path):
     return path
 
 
-def looks_installable(filename, url=""):
+def looks_installable(filename, url="", mime=""):
     """True if this download is plausibly something we could replace."""
+    if (mime or "").split(";")[0].strip().lower() in INSTALLER_MIMES:
+        return True
     name = (filename or "").lower()
     if not name:
         name = norm_path(urlparse(url).path).rsplit("/", 1)[-1].lower()
@@ -122,8 +149,10 @@ def path_names_the_app(entry):
     return False
 
 
-def looks_windows(filename, url=""):
+def looks_windows(filename, url="", mime=""):
     """True if this download is a Windows installer."""
+    if (mime or "").split(";")[0].strip().lower() in WINDOWS_MIMES:
+        return True
     name = (filename or "").lower()
     if not name:
         name = norm_path(urlparse(url).path).rsplit("/", 1)[-1].lower()
@@ -326,6 +355,19 @@ def _self_test():
     print(f"  {'ok  ' if ok else 'FAIL'}  {'verified Flathub before AUR':38} {order}")
 
     print()
+    # Redirect download endpoints carry no extension and no filename yet; the
+    # content type is the only signal available at that moment.
+    for mime, want in [("application/vnd.debian.binary-package", True),
+                       ("application/x-rpm", True),
+                       ("application/octet-stream", False),
+                       ("text/html", False)]:
+        ok = looks_installable("", "https://vendor.example/api/download", mime) == want
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'}  by content type {mime:38} -> {want}")
+    ok = looks_windows("", "https://v.example/get", "application/x-msdownload")
+    failures += not ok
+    print(f"  {'ok  ' if ok else 'FAIL'}  windows by content type")
+
     for name, want_win in [("PhotoshopSetup.exe", True), ("office.msi", True),
                            ("zoom_amd64.deb", False), ("notes.pdf", False)]:
         ok = looks_windows(name) == want_win
